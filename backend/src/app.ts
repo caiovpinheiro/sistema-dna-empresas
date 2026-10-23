@@ -13,6 +13,7 @@ import type { EmpresaConfig } from "./config.js";
 import { AppError } from "./lib/errors.js";
 import { pingServico, tokenDoServico } from "./lib/servico.js";
 import { PortalEmpresaService, type SessaoEmpresa } from "./services/portal-empresa.service.js";
+import { PortalDadosService } from "./services/portal-dados.service.js";
 
 const COOKIE = "dnawork_empresa";
 
@@ -45,6 +46,7 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
     },
   });
   const portal = new PortalEmpresaService(db);
+  const dados = new PortalDadosService(db);
 
   app.setErrorHandler((error: unknown, request, reply) => {
     if (error instanceof AppError) {
@@ -145,6 +147,23 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   app.get("/api/v1/empresa/menu", async (request) => {
     const menu = await portal.menu(request.user.sub, request.user.empresaId!);
     return { success: true, data: menu };
+  });
+
+  app.get("/api/v1/empresa/painel", async (request) => ({
+    success: true,
+    data: await dados.painel(request.user.sub, request.user.empresaId!),
+  }));
+  app.get("/api/v1/empresa/colaboradores", async (request) => {
+    const busca = ler(z.object({ q: z.string().optional() }), request.query).q?.trim() ?? "";
+    return { success: true, data: await dados.colaboradores(request.user.sub, request.user.empresaId!, busca) };
+  });
+  app.get("/api/v1/empresa/vagas", async (request) => {
+    const busca = ler(z.object({ q: z.string().optional() }), request.query).q?.trim() ?? "";
+    return { success: true, data: await dados.vagas(request.user.sub, request.user.empresaId!, busca) };
+  });
+  app.get("/api/v1/empresa/contratados", async (request) => {
+    const busca = ler(z.object({ q: z.string().optional() }), request.query).q?.trim() ?? "";
+    return { success: true, data: await dados.contratados(request.user.sub, request.user.empresaId!, busca) };
   });
 
   await servirFrontend(app);

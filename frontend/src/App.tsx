@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Briefcase, Building2, Check, ChevronDown, Circle, Clock, Gauge, GraduationCap, LayoutDashboard, Lock, LogOut, Menu, Settings, User, Users, Wallet, X, type LucideIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate, useSearchParams } from "react-router-dom";
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Consulta, Inicio } from "./pages/consultas";
 import { Button, Card, Field, Input } from "./components/ui";
 import { ApiError, api } from "./lib/api";
 
@@ -39,6 +40,9 @@ function Protegido() {
   return (
     <Routes>
       <Route path="/" element={<Portal sessao={dados} />} />
+      <Route path="/colaboradores" element={<Portal sessao={dados} />} />
+      <Route path="/vagas" element={<Portal sessao={dados} />} />
+      <Route path="/contratados" element={<Portal sessao={dados} />} />
       <Route path="/opcao" element={<Portal sessao={dados} />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
@@ -53,6 +57,7 @@ function Portal({ sessao }: { sessao: Sessao }) {
   const link = params.get("link");
   const itens = menu.data?.data ?? [];
   const atual = link ? achar(itens, link) : null;
+  const { pathname } = useLocation();
   const empresa = sessao.empresas.find((item) => item.id === sessao.empresaId)?.nome;
   const expandido = aberto || hover;
 
@@ -94,13 +99,12 @@ function Portal({ sessao }: { sessao: Sessao }) {
           <p className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-600">{empresa}</p>
         </header>
         <main className="mx-auto max-w-5xl px-5 py-6 md:px-8">
-          {link && !atual ? (
-            <Painel titulo="Opção não liberada" texto="Esta tela não faz parte das opções deste usuário." />
-          ) : atual ? (
-            <Painel titulo={atual.label} texto="Esta é a mesma opção do portal que a empresa já acessa. A tela desta função entra na sequência, com o mesmo nome." detalhe={atual.link ?? undefined} />
-          ) : (
-            <Painel titulo="Início" texto="Passe o mouse na barra da esquerda para abrir o menu. As opções continuam sendo as desta empresa e deste usuário." />
-          )}
+          {pathname === "/colaboradores" ? <Consulta titulo="Colaboradores" caminho="/api/v1/empresa/colaboradores" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "datainicio", titulo: "Início" }, { chave: "email", titulo: "E-mail" }, { chave: "celular", titulo: "Celular" }]} /> : null}
+          {pathname === "/vagas" ? <Consulta titulo="Vagas" caminho="/api/v1/empresa/vagas" colunas={[{ chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "cidade", titulo: "Cidade" }, { chave: "situacao", titulo: "Situação" }, { chave: "dataabertura", titulo: "Abertura" }]} /> : null}
+          {pathname === "/contratados" ? <Consulta titulo="Contratados" caminho="/api/v1/empresa/contratados" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "inicio", titulo: "Início" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/" ? <Inicio /> : null}
+          {pathname === "/opcao" && link && !atual ? <Painel titulo="Opção não liberada" texto="Esta tela não faz parte das opções deste usuário." /> : null}
+          {pathname === "/opcao" && atual ? <Painel titulo={atual.label} texto="Esta opção ainda será ligada. O nome é o mesmo do portal que a empresa já usa." detalhe={atual.link ?? undefined} /> : null}
         </main>
       </div>
     </div>
@@ -109,14 +113,15 @@ function Portal({ sessao }: { sessao: Sessao }) {
 
 function Ramo({ item, ativo, expandido, onNavigate, nivel = 0 }: { item: ItemMenu; ativo: string | null; expandido: boolean; onNavigate: () => void; nivel?: number }) {
   const [open, setOpen] = useState(false);
+  const { pathname } = useLocation();
   const Icon = iconeDe(item.label);
   useEffect(() => {
     if (!expandido) setOpen(false);
   }, [expandido]);
   const texto = <span className={`overflow-hidden whitespace-nowrap transition-all duration-300 ${expandido ? "max-w-48 opacity-100" : "max-w-0 opacity-0"}`}>{item.label}</span>;
   if (item.link) {
-    const href = item.link === "principal.php" ? "/" : `/opcao?link=${encodeURIComponent(item.link)}`;
-    const marcado = item.link === "principal.php" ? !ativo : ativo === item.link;
+    const href = destinoDoLink(item.link);
+    const marcado = href.startsWith("/opcao") ? ativo === item.link : pathname === href;
     return (
       <li>
         <Link to={href} onClick={onNavigate} title={item.label} className={`flex h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold transition duration-200 ${marcado ? "bg-[#5b21b6] text-white" : "text-neutral-700 hover:bg-white hover:shadow-sm"}`}>
@@ -291,6 +296,15 @@ function FundoRoxo({ children, className = "", papel }: { children: ReactNode; c
       <div className="login-fundo-conteudo">{children}</div>
     </div>
   );
+}
+
+function destinoDoLink(link: string): string {
+  const base = link.split("?")[0];
+  if (base === "principal.php") return "/";
+  if (base === "buscar-candidato-ponto.php") return "/colaboradores";
+  if (base === "buscar-vagas.php") return "/vagas";
+  if (base === "buscar-contratados.php") return "/contratados";
+  return `/opcao?link=${encodeURIComponent(link)}`;
 }
 
 function iconeDe(label: string): LucideIcon {
