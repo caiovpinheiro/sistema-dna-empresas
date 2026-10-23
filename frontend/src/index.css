@@ -38,6 +38,15 @@ button, a {
 .press:hover { transform: translateY(-1px); box-shadow: 0 10px 24px rgb(36 24 45 / 16%); }
 .press:active { transform: scale(0.97); }
 
+.acao {
+  border-radius: 0.6rem;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.acao-purple { background: #f3e8f5; color: #6a4b84; }
+
 @media (prefers-reduced-motion: reduce) {
   .nav-sub,
   .motion-pop { animation: none; }
