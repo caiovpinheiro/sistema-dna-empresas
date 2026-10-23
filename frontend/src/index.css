@@ -58,7 +58,7 @@ button, a {
   top: -18%;
   left: -12%;
   background: #c4b5fd;
-  animation: login-drift 11s ease-in-out infinite alternate;
+  animation: login-drift 7s ease-in-out infinite alternate;
 }
 
 .login-orb-b {
@@ -67,7 +67,7 @@ button, a {
   right: -14%;
   bottom: -20%;
   background: #7c3aed;
-  animation: login-drift 15s ease-in-out infinite alternate-reverse;
+  animation: login-drift 9s ease-in-out infinite alternate-reverse;
 }
 
 .login-orb-c {
@@ -77,7 +77,7 @@ button, a {
   left: 38%;
   background: #e9d5ff;
   opacity: 0.55;
-  animation: login-drift 9s ease-in-out infinite alternate;
+  animation: login-drift 6s ease-in-out infinite alternate;
 }
 
 .login-fundo-conteudo {
@@ -90,8 +90,8 @@ button, a {
 }
 
 @keyframes login-drift {
-  from { transform: translate3d(0, 0, 0) scale(1); }
-  to { transform: translate3d(14%, -10%, 0) scale(1.18); }
+  from { transform: translate3d(-8%, 6%, 0) scale(0.92); }
+  to { transform: translate3d(22%, -16%, 0) scale(1.22); }
 }
 
 .login-veil {
@@ -165,8 +165,7 @@ button, a {
   .nav-sub,
   .motion-pop,
   .login-ok,
-  .login-ring,
-  .login-orb { animation: none; }
+  .login-ring { animation: none; }
   button, a, .press { transition: none; }
   .press:hover, .press:active { transform: none; }
 }
