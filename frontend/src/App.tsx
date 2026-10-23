@@ -170,7 +170,7 @@ function LoginPage() {
   }, [entrou, navigate]);
   if (entrou) {
     return (
-      <div className="login-veil" role="status">
+      <FundoRoxo className="login-veil" papel="status">
         <div className="login-ok">
           <span className="login-badge">
             <span className="login-ring" />
@@ -179,7 +179,7 @@ function LoginPage() {
           <p className="login-title">Login realizado</p>
           <p className="login-sub">{entrou}</p>
         </div>
-      </div>
+      </FundoRoxo>
     );
   }
   return (
@@ -260,7 +260,18 @@ function Painel({ titulo, texto, detalhe }: { titulo: string; texto: string; det
 }
 
 function TelaCentral({ children }: { children: ReactNode }) {
-  return <div className="grid min-h-screen place-items-center bg-[radial-gradient(circle_at_center,#7c3aed_0%,#5b21b6_46%,#3b0764_100%)] px-4">{children}</div>;
+  return <FundoRoxo>{children}</FundoRoxo>;
+}
+
+function FundoRoxo({ children, className = "", papel }: { children: ReactNode; className?: string; papel?: "status" }) {
+  return (
+    <div className={`login-fundo ${className}`} role={papel}>
+      <span className="login-orb login-orb-a" aria-hidden="true" />
+      <span className="login-orb login-orb-b" aria-hidden="true" />
+      <span className="login-orb login-orb-c" aria-hidden="true" />
+      <div className="login-fundo-conteudo">{children}</div>
+    </div>
+  );
 }
 
 function iconeDe(label: string): LucideIcon {

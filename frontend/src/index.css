@@ -36,13 +36,68 @@ button, a {
   to { transform: scale(1.75); opacity: 0; }
 }
 
+.login-fundo {
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  overflow: hidden;
+  background: #3b0764;
+}
+
+.login-orb {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(28px);
+  opacity: 0.9;
+  will-change: transform;
+}
+
+.login-orb-a {
+  width: 58vmax;
+  height: 58vmax;
+  top: -18%;
+  left: -12%;
+  background: #c4b5fd;
+  animation: login-drift 11s ease-in-out infinite alternate;
+}
+
+.login-orb-b {
+  width: 48vmax;
+  height: 48vmax;
+  right: -14%;
+  bottom: -20%;
+  background: #7c3aed;
+  animation: login-drift 15s ease-in-out infinite alternate-reverse;
+}
+
+.login-orb-c {
+  width: 36vmax;
+  height: 36vmax;
+  top: 30%;
+  left: 38%;
+  background: #e9d5ff;
+  opacity: 0.55;
+  animation: login-drift 9s ease-in-out infinite alternate;
+}
+
+.login-fundo-conteudo {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 1rem;
+}
+
+@keyframes login-drift {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to { transform: translate3d(14%, -10%, 0) scale(1.18); }
+}
+
 .login-veil {
   position: fixed;
   inset: 0;
   z-index: 60;
-  display: grid;
-  place-items: center;
-  background: radial-gradient(circle at center, #7c3aed 0%, #5b21b6 46%, #3b0764 100%);
 }
 
 .login-ok {
@@ -110,7 +165,8 @@ button, a {
   .nav-sub,
   .motion-pop,
   .login-ok,
-  .login-ring { animation: none; }
+  .login-ring,
+  .login-orb { animation: none; }
   button, a, .press { transition: none; }
   .press:hover, .press:active { transform: none; }
 }
