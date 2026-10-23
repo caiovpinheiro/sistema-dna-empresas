@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Briefcase, Building2, ChevronDown, Circle, Clock, Gauge, GraduationCap, LayoutDashboard, LogOut, Menu, Settings, Users, Wallet, X, type LucideIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Briefcase, Building2, Check, ChevronDown, Circle, Clock, Gauge, GraduationCap, LayoutDashboard, LogOut, Menu, Settings, Users, Wallet, X, type LucideIcon } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate, useSearchParams } from "react-router-dom";
 import { Button, Card, Field, Input, Select } from "./components/ui";
 import { ApiError, api } from "./lib/api";
@@ -151,16 +151,37 @@ function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [erro, setErro] = useState("");
+  const [entrou, setEntrou] = useState("");
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const login = useMutation({
-    mutationFn: () => api("/api/v1/empresa/login", { method: "POST", body: JSON.stringify({ email, password }) }),
-    onSuccess: async () => {
+    mutationFn: () => api<{ nome?: string }>("/api/v1/empresa/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+    onSuccess: async (resposta) => {
       await queryClient.invalidateQueries({ queryKey: ["sessao-empresa"] });
-      navigate("/");
+      setEntrou(resposta.data.nome || email);
     },
     onError: (error) => setErro(error instanceof ApiError ? error.message : "Falha no login."),
   });
+  useEffect(() => {
+    if (!entrou) return;
+    const reduzido = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const timer = window.setTimeout(() => navigate("/"), reduzido ? 350 : 1100);
+    return () => window.clearTimeout(timer);
+  }, [entrou, navigate]);
+  if (entrou) {
+    return (
+      <div className="login-veil" role="status">
+        <div className="login-ok">
+          <span className="login-badge">
+            <span className="login-ring" />
+            <Check size={36} strokeWidth={2.6} />
+          </span>
+          <p className="login-title">Login realizado</p>
+          <p className="login-sub">{entrou}</p>
+        </div>
+      </div>
+    );
+  }
   return (
     <TelaCentral>
       <Card className="w-full max-w-md p-8 hover:translate-y-0">
