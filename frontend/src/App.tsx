@@ -65,7 +65,7 @@ function Portal({ sessao }: { sessao: Sessao }) {
         className={`${aberto ? "fixed inset-y-0 z-50 flex w-72" : "hidden"} flex-col overflow-x-hidden bg-neutral-100 text-neutral-800 shadow-[4px_0_24px_rgb(49_10_80_/_8%)] transition-[width] duration-300 ease-out md:static md:flex md:min-h-screen ${hover ? "md:w-72" : "md:w-[72px]"}`}
       >
         <div className={`flex items-center py-4 ${expandido ? "gap-3 px-4" : "justify-center px-2"}`}>
-          <img src="/logo-mono.png" alt="DNAWORK" className={`shrink-0 object-contain ${expandido ? "h-9 w-16" : "h-8 w-12"}`} />
+          <img src="/logo-mono.png" alt="DNA Work" className={`shrink-0 object-contain ${expandido ? "h-9 w-16" : "h-8 w-12"}`} />
           <div className={`overflow-hidden whitespace-nowrap transition-all duration-300 ${expandido ? "w-auto opacity-100" : "w-0 opacity-0"}`}>
             <p className="text-xs font-bold tracking-wide uppercase text-[#5b21b6]">DNAWORK</p>
             <h1 className="text-base font-extrabold leading-5">Empresas</h1>
@@ -198,7 +198,7 @@ function LoginPage() {
     <TelaCentral>
       <form className="relative mt-12 w-full max-w-md rounded-[2rem] bg-white px-8 pb-8 pt-16 shadow-[0_24px_50px_rgb(49_10_80_/_18%)]" onSubmit={(event) => { event.preventDefault(); setErro(""); login.mutate(); }}>
         <span className="absolute left-1/2 top-0 z-10 flex h-24 w-32 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-2xl bg-white px-3 shadow-[0_14px_28px_rgb(49_10_80_/_18%)]">
-          <img src="/logo-mono.png" alt="DNAWORK" className="h-12 w-full object-contain" />
+          <img src="/logo-mono.png" alt="DNA Work" className="h-12 w-full object-contain" />
         </span>
         <label className="relative block">
           <User size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-500" />
