@@ -186,9 +186,9 @@ function LoginPage() {
     <TelaCentral>
       <Card className="w-full max-w-md p-8 hover:translate-y-0">
         <div className="mb-6 flex items-center gap-3">
-          <span className="grid h-12 w-12 place-items-center rounded-2xl bg-purple-brand font-extrabold text-white">DW</span>
+          <span className="grid h-12 w-12 place-items-center rounded-2xl bg-[#5b21b6] font-extrabold text-white">DW</span>
           <div>
-            <p className="text-xs font-bold tracking-wide uppercase text-purple-brand">DNAWORK</p>
+            <p className="text-xs font-bold tracking-wide uppercase text-[#5b21b6]">DNAWORK</p>
             <h1 className="text-2xl font-extrabold">Acesso da empresa</h1>
           </div>
         </div>
@@ -260,7 +260,7 @@ function Painel({ titulo, texto, detalhe }: { titulo: string; texto: string; det
 }
 
 function TelaCentral({ children }: { children: ReactNode }) {
-  return <div className="grid min-h-screen place-items-center bg-gradient-to-b from-[#7d5b99] to-[#4c3262] px-4">{children}</div>;
+  return <div className="grid min-h-screen place-items-center bg-[radial-gradient(circle_at_center,#7c3aed_0%,#5b21b6_46%,#3b0764_100%)] px-4">{children}</div>;
 }
 
 function iconeDe(label: string): LucideIcon {

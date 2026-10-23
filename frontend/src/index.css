@@ -42,7 +42,7 @@ button, a {
   z-index: 60;
   display: grid;
   place-items: center;
-  background: linear-gradient(#7d5b99, #4c3262);
+  background: radial-gradient(circle at center, #7c3aed 0%, #5b21b6 46%, #3b0764 100%);
 }
 
 .login-ok {
@@ -59,15 +59,16 @@ button, a {
   width: 88px;
   height: 88px;
   border-radius: 999px;
-  background: white;
-  color: #6a4b84;
+  background: #f5f3ff;
+  color: #5b21b6;
+  box-shadow: 0 0 0 10px rgb(196 181 253 / 35%);
 }
 
 .login-ring {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  border: 2px solid white;
+  border: 2px solid #c4b5fd;
   animation: login-ring 900ms ease-out both;
 }
 

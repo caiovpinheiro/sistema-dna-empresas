@@ -3,7 +3,7 @@ import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAt
 const buttonBase = "inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md active:translate-y-0 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-sm";
 
 const variants = {
-  primary: "bg-purple-brand text-white hover:bg-[#5a3f70]",
+  primary: "bg-[#5b21b6] text-white hover:bg-[#4c1d95]",
   secondary: "bg-white text-[#24182d] ring-1 ring-slate-200 hover:bg-slate-50",
   ghost: "text-slate-600 shadow-none hover:bg-white/80 hover:shadow-none",
 };
