@@ -17,6 +17,34 @@ button, a, input, select {
   font: inherit;
 }
 
+button, a {
+  transition: background-color 180ms ease, color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+.nav-sub,
+.motion-pop {
+  animation: rise-in 180ms ease-out;
+}
+
+.press {
+  transition: transform 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
+}
+
+.press:hover { transform: translateY(-1px); box-shadow: 0 10px 24px rgb(36 24 45 / 16%); }
+.press:active { transform: scale(0.97); }
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-sub,
+  .motion-pop { animation: none; }
+  button, a, .press { transition: none; }
+  .press:hover, .press:active { transform: none; }
+}
+
 :focus-visible {
   outline: 2px solid #6a4b84;
   outline-offset: 2px;

@@ -52,7 +52,7 @@ function Portal({ sessao }: { sessao: Sessao }) {
 
   return (
     <div className="min-h-screen md:grid md:grid-cols-[290px_1fr]">
-      <aside className="bg-purple-brand text-white md:min-h-screen">
+      <aside className="bg-gradient-to-b from-[#7d5b99] to-[#4c3262] text-white md:min-h-screen">
         <div className="border-b border-white/15 px-5 py-5">
           <p className="text-xs font-bold tracking-wide uppercase text-white/70">DNAWORK</p>
           <h1 className="text-lg font-extrabold">Empresas</h1>
@@ -99,7 +99,7 @@ function Ramo({ item, ativo }: { item: ItemMenu; ativo: string | null }) {
     const marcado = item.link === "principal.php" ? !ativo : ativo === item.link;
     return (
       <li>
-        <Link to={href} className={`block rounded-xl px-3 py-2 text-sm font-semibold ${marcado ? "bg-white text-purple-brand" : "text-white/90 hover:bg-white/10"}`}>
+        <Link to={href} className={`block rounded-xl px-3 py-2 text-sm font-semibold transition duration-200 active:scale-[0.98] ${marcado ? "bg-white text-purple-brand shadow-sm" : "text-white/90 hover:translate-x-1 hover:bg-white/15 hover:text-white"}`}>
           {item.label}
         </Link>
       </li>
@@ -108,7 +108,7 @@ function Ramo({ item, ativo }: { item: ItemMenu; ativo: string | null }) {
   return (
     <li className="pt-2">
       <p className="px-3 py-1 text-xs font-bold tracking-wide uppercase text-white/60">{item.label}</p>
-      {aberto ? <ul className="mt-1 grid gap-1">{item.children.map((filho) => <Ramo key={filho.id} item={filho} ativo={ativo} />)}</ul> : null}
+      {aberto ? <ul className="nav-sub mt-1 grid gap-1 border-l border-white/15 pl-3">{item.children.map((filho) => <Ramo key={filho.id} item={filho} ativo={ativo} />)}</ul> : null}
     </li>
   );
 }
@@ -125,7 +125,7 @@ function EmpresaSelect({ empresas, atual }: { empresas: Empresa[]; atual: string
   if (empresas.length < 2) return null;
   return (
     <select
-      className="mt-3 w-full rounded-xl border border-white/20 bg-white/10 px-3 py-2 text-sm"
+      className="mt-3 w-full rounded-xl border border-white/20 bg-white/10 px-3 py-2 text-sm transition duration-200 hover:bg-white/20"
       value={atual}
       onChange={(event) => trocar.mutate(event.target.value)}
       aria-label="Empresa"
@@ -151,7 +151,7 @@ function LoginPage() {
   });
   return (
     <TelaCentral>
-      <form className="w-full max-w-md rounded-3xl bg-white p-8 shadow-xl" onSubmit={(event) => { event.preventDefault(); setErro(""); login.mutate(); }}>
+      <form className="motion-pop w-full max-w-md rounded-3xl bg-white p-8 shadow-xl" onSubmit={(event) => { event.preventDefault(); setErro(""); login.mutate(); }}>
         <p className="text-xs font-bold tracking-wide uppercase text-purple-brand">DNAWORK</p>
         <h1 className="mt-1 text-2xl font-extrabold">Acesso da empresa</h1>
         <label className="mt-6 block text-sm font-semibold">E-mail
@@ -161,7 +161,7 @@ function LoginPage() {
           <input className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2" type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} />
         </label>
         {erro ? <p className="mt-3 text-sm text-rose-600" role="alert">{erro}</p> : null}
-        <button className="mt-6 w-full rounded-xl bg-purple-brand px-4 py-2.5 font-bold text-white disabled:opacity-60" disabled={login.isPending}>
+        <button className="press mt-6 w-full rounded-xl bg-purple-brand px-4 py-2.5 font-bold text-white disabled:opacity-60" disabled={login.isPending}>
           {login.isPending ? "Entrando…" : "Entrar"}
         </button>
       </form>
@@ -183,7 +183,7 @@ function SenhaPage() {
   });
   return (
     <TelaCentral>
-      <form className="w-full max-w-md rounded-3xl bg-white p-8 shadow-xl" onSubmit={(event) => {
+      <form className="motion-pop w-full max-w-md rounded-3xl bg-white p-8 shadow-xl" onSubmit={(event) => {
         event.preventDefault();
         if (password !== confirma) { setErro("As senhas não conferem."); return; }
         setErro("");
@@ -198,7 +198,7 @@ function SenhaPage() {
           <input className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2" type="password" minLength={6} required value={confirma} onChange={(event) => setConfirma(event.target.value)} />
         </label>
         {erro ? <p className="mt-3 text-sm text-rose-600" role="alert">{erro}</p> : null}
-        <button className="mt-6 w-full rounded-xl bg-purple-brand px-4 py-2.5 font-bold text-white" disabled={salvar.isPending}>Salvar senha</button>
+        <button className="press mt-6 w-full rounded-xl bg-purple-brand px-4 py-2.5 font-bold text-white" disabled={salvar.isPending}>Salvar senha</button>
       </form>
     </TelaCentral>
   );
@@ -214,12 +214,12 @@ function Sair() {
       navigate("/login");
     },
   });
-  return <button className="rounded-xl px-3 py-2 text-sm font-bold text-purple-brand" onClick={() => sair.mutate()}>Sair</button>;
+  return <button className="press rounded-xl bg-white px-3 py-2 text-sm font-bold text-purple-brand shadow-sm" onClick={() => sair.mutate()}>Sair</button>;
 }
 
 function Painel({ titulo, texto, detalhe }: { titulo: string; texto: string; detalhe?: string }) {
   return (
-    <section className="max-w-2xl rounded-3xl bg-white p-6 shadow-sm">
+    <section className="motion-pop max-w-2xl rounded-3xl bg-white p-6 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md">
       <h2 className="text-2xl font-extrabold">{titulo}</h2>
       <p className="mt-3 text-sm leading-6 text-slate-600">{texto}</p>
       {detalhe ? <p className="mt-4 text-xs text-slate-400">{detalhe}</p> : null}
