@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --color-purple-brand: #6a4b84;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #f6f3f8;
+  color: #24182d;
+  font-family: var(--font-sans);
+}
+
+button, a, input, select {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid #6a4b84;
+  outline-offset: 2px;
+}
