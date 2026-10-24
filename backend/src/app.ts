@@ -173,6 +173,18 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   app.post("/api/v1/empresa/feriados", async (request) => ({ success: true, data: await dados.salvarFeriado(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
   app.post("/api/v1/empresa/colaboradores", async (request) => ({ success: true, data: await dados.salvarColaborador(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
   app.post("/api/v1/empresa/vagas", async (request) => ({ success: true, data: await dados.salvarVaga(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
+  app.get("/api/v1/empresa/empresa", async (request) => ({ success: true, data: await dados.empresa(request.user.sub, request.user.empresaId!) }));
+  app.post("/api/v1/empresa/filiais", async (request) => ({ success: true, data: await dados.salvarFilial(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
+  app.get("/api/v1/empresa/usuarios", async (request) => ({ success: true, data: await dados.usuarios(request.user.sub, request.user.empresaId!) }));
+  app.post("/api/v1/empresa/usuarios", async (request) => ({ success: true, data: await dados.salvarUsuario(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
+  app.get("/api/v1/empresa/talentos", async (request) => ({ success: true, data: await dados.talentos(request.user.sub, request.user.empresaId!) }));
+  app.post("/api/v1/empresa/talentos", async (request) => ({ success: true, data: await dados.salvarTalento(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
+  app.get("/api/v1/empresa/encaminhamentos", async (request) => ({ success: true, data: await dados.encaminhamentos(request.user.sub, request.user.empresaId!) }));
+  app.get("/api/v1/empresa/documentos", async (request) => ({ success: true, data: await dados.documentos(request.user.sub, request.user.empresaId!) }));
+  app.get("/api/v1/empresa/seguro", async (request) => ({ success: true, data: await dados.seguro(request.user.sub, request.user.empresaId!) }));
+  app.get("/api/v1/empresa/calendario", async (request) => ({ success: true, data: await dados.calendario(request.user.sub, request.user.empresaId!) }));
+  app.get("/api/v1/empresa/avaliacoes", async (request) => ({ success: true, data: await dados.avaliacoes(request.user.sub, request.user.empresaId!) }));
+  app.get("/api/v1/empresa/holerites", async (request) => ({ success: true, data: await dados.holerites(request.user.sub, request.user.empresaId!) }));
   app.get("/api/v1/empresa/faturas", async (request) => {
     const situacao = ler(z.object({ situacao: z.enum(["aberta", "paga", "todas"]).optional() }), request.query).situacao ?? "aberta";
     return { success: true, data: await dados.faturas(request.user.sub, request.user.empresaId!, situacao) };

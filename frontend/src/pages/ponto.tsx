@@ -74,7 +74,7 @@ export function RelatorioPonto() {
   ]} />;
 }
 
-function Formulario({ titulo, destino, voltar, campos, extra = {} }: {
+export function Formulario({ titulo, destino, voltar, campos, extra = {} }: {
   titulo: string;
   destino: string;
   voltar: string;

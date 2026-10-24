@@ -3,7 +3,7 @@ import { Briefcase, Building2, Check, ChevronDown, Circle, Clock, Gauge, Graduat
 import { useEffect, useState, type ReactNode } from "react";
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Consulta, Faturas, Inicio } from "./pages/consultas";
-import { CargaNova, ColaboradorNovo, EscalaNova, FeriadoNovo, Listagem, RelatorioPonto, VagaNova } from "./pages/ponto";
+import { CargaNova, ColaboradorNovo, EscalaNova, FeriadoNovo, Formulario, Listagem, RelatorioPonto, VagaNova } from "./pages/ponto";
 import { Button, Card, Field, Input } from "./components/ui";
 import { ApiError, api } from "./lib/api";
 
@@ -50,8 +50,21 @@ function Protegido() {
       <Route path="/feriados" element={<Portal sessao={dados} />} />
       <Route path="/feriados/novo" element={<Portal sessao={dados} />} />
       <Route path="/ponto/relatorio" element={<Portal sessao={dados} />} />
+      <Route path="/vagas" element={<Portal sessao={dados} />} />
       <Route path="/vagas/nova" element={<Portal sessao={dados} />} />
       <Route path="/faturas" element={<Portal sessao={dados} />} />
+      <Route path="/talentos" element={<Portal sessao={dados} />} />
+      <Route path="/talentos/novo" element={<Portal sessao={dados} />} />
+      <Route path="/relatorios/encaminhamentos" element={<Portal sessao={dados} />} />
+      <Route path="/relatorios/documentos" element={<Portal sessao={dados} />} />
+      <Route path="/relatorios/seguro" element={<Portal sessao={dados} />} />
+      <Route path="/relatorios/calendario" element={<Portal sessao={dados} />} />
+      <Route path="/avaliacoes" element={<Portal sessao={dados} />} />
+      <Route path="/holerite" element={<Portal sessao={dados} />} />
+      <Route path="/empresa" element={<Portal sessao={dados} />} />
+      <Route path="/empresa/filial" element={<Portal sessao={dados} />} />
+      <Route path="/usuarios" element={<Portal sessao={dados} />} />
+      <Route path="/usuarios/novo" element={<Portal sessao={dados} />} />
       <Route path="/contratados" element={<Portal sessao={dados} />} />
       <Route path="/opcao" element={<Portal sessao={dados} />} />
       <Route path="*" element={<Navigate to="/" replace />} />
@@ -119,6 +132,18 @@ function Portal({ sessao }: { sessao: Sessao }) {
           {pathname === "/feriados/novo" ? <FeriadoNovo /> : null}
           {pathname === "/ponto/relatorio" ? <RelatorioPonto /> : null}
           {pathname === "/vagas/nova" ? <VagaNova tipo={new URLSearchParams(search).get("tipo") ?? "2"} /> : null}
+          {pathname === "/talentos" ? <Listagem titulo="Banco de talentos" caminho="/api/v1/empresa/talentos" novo="/talentos/novo" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cpf", titulo: "CPF" }, { chave: "email", titulo: "E-mail" }, { chave: "cidade", titulo: "Cidade" }]} /> : null}
+          {pathname === "/talentos/novo" ? <Formulario titulo="Cadastrar talento" destino="/api/v1/empresa/talentos" voltar="/talentos" campos={[["nome", "Nome", "text"], ["cpf", "CPF", "text"], ["email", "E-mail", "email"], ["celular", "Celular", "text"], ["cidade", "Cidade", "text"]]} /> : null}
+          {pathname === "/relatorios/encaminhamentos" ? <Listagem titulo="Candidatos encaminhados" caminho="/api/v1/empresa/encaminhamentos" novo="/vagas" colunas={[{ chave: "nome", titulo: "Candidato" }, { chave: "cargo", titulo: "Vaga" }, { chave: "data", titulo: "Data" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/relatorios/documentos" ? <Listagem titulo="Documentos" caminho="/api/v1/empresa/documentos" novo="/colaboradores" colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "documentos", titulo: "Arquivos" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/relatorios/seguro" ? <Listagem titulo="Seguro de vida" caminho="/api/v1/empresa/seguro" novo="/colaboradores" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "inicio", titulo: "Início" }]} /> : null}
+          {pathname === "/relatorios/calendario" ? <Listagem titulo="Calendário" caminho="/api/v1/empresa/calendario" novo="/vagas" colunas={[{ chave: "nome", titulo: "Candidato" }, { chave: "cargo", titulo: "Vaga" }, { chave: "data", titulo: "Data" }, { chave: "hora", titulo: "Hora" }]} /> : null}
+          {pathname === "/avaliacoes" ? <Listagem titulo="Avaliações" caminho="/api/v1/empresa/avaliacoes" novo="/colaboradores" colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "ciclo", titulo: "Ciclo" }, { chave: "area", titulo: "Área" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/holerite" ? <Listagem titulo="Holerites" caminho="/api/v1/empresa/holerites" novo="/colaboradores" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "competencia", titulo: "Competência" }, { chave: "bruto", titulo: "Bruto" }, { chave: "liquido", titulo: "Líquido" }]} /> : null}
+          {pathname === "/usuarios" ? <Listagem titulo="Usuários" caminho="/api/v1/empresa/usuarios" novo="/usuarios/novo" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "email", titulo: "E-mail" }, { chave: "telefone", titulo: "Telefone" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/usuarios/novo" ? <Formulario titulo="Cadastrar usuário" destino="/api/v1/empresa/usuarios" voltar="/usuarios" campos={[["nome", "Nome", "text"], ["email", "E-mail", "email"], ["telefone", "Telefone", "text"], ["senha", "Senha", "password"]]} /> : null}
+          {pathname === "/empresa/filial" ? <Formulario titulo="Cadastrar filial" destino="/api/v1/empresa/filiais" voltar="/empresa" campos={[["nome", "Nome", "text"], ["cnpj", "CNPJ", "text"], ["email", "E-mail", "email"], ["cidade", "Cidade", "text"]]} /> : null}
+          {pathname === "/empresa" ? <EmpresaDados /> : null}
           {pathname === "/faturas" ? <Faturas /> : null}
           {pathname === "/vagas" ? <Consulta titulo="Vagas" caminho="/api/v1/empresa/vagas" colunas={[{ chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "cidade", titulo: "Cidade" }, { chave: "situacao", titulo: "Situação" }, { chave: "dataabertura", titulo: "Abertura" }]} /> : null}
           {pathname === "/contratados" ? <Consulta titulo="Contratados" caminho="/api/v1/empresa/contratados" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "inicio", titulo: "Início" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
@@ -318,6 +343,34 @@ function FundoRoxo({ children, className = "", papel }: { children: ReactNode; c
   );
 }
 
+function EmpresaDados() {
+  const dados = useQuery({ queryKey: ["empresa-dados"], queryFn: () => api<{ nome: string; cnpj: string | null; email: string | null; cidade: string | null; filiais: Array<{ nome: string; cnpj: string | null; cidade: string | null }> }>("/api/v1/empresa/empresa") });
+  const empresa = dados.data?.data;
+  const navigate = useNavigate();
+  return (
+    <section className="grid gap-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-2xl font-extrabold">{empresa?.nome || "Empresa"}</h2>
+          <p className="text-sm text-slate-500">{[empresa?.cnpj, empresa?.cidade, empresa?.email].filter(Boolean).join(" · ")}</p>
+        </div>
+        <button className="rounded-xl bg-[#5b21b6] px-4 py-2 text-sm font-bold text-white" onClick={() => navigate("/empresa/filial")}>Cadastrar filial</button>
+      </div>
+      <div className="overflow-x-auto rounded-2xl bg-white shadow-sm">
+        <table className="w-full text-left text-sm">
+          <thead className="text-xs uppercase text-slate-400"><tr><th className="px-4 py-3">Filial</th><th>CNPJ</th><th>Cidade</th></tr></thead>
+          <tbody>
+            {(empresa?.filiais ?? []).map((filial) => (
+              <tr key={filial.nome} className="border-t border-slate-100"><td className="px-4 py-3">{filial.nome}</td><td>{filial.cnpj || "—"}</td><td>{filial.cidade || "—"}</td></tr>
+            ))}
+          </tbody>
+        </table>
+        {!dados.isLoading && (empresa?.filiais.length ?? 0) === 0 ? <p className="px-4 py-6 text-sm text-slate-500">Nenhuma filial cadastrada.</p> : null}
+      </div>
+    </section>
+  );
+}
+
 function destinoDoLink(link: string): string {
   const [base, query] = link.split("?");
   const tipo = new URLSearchParams(query ?? "").get("Tipo");
@@ -332,7 +385,20 @@ function destinoDoLink(link: string): string {
   if (base === "cadastrar-feriado.php") return "/feriados/novo";
   if (base === "relatorio-ponto-em-massa.php") return "/ponto/relatorio";
   if (base === "buscar-faturas.php") return "/faturas";
-  if (base === "cadastrar-vaga-estagio.php") return "/vagas/nova?tipo=1";
+  if (base === "buscar-vagas.php") return "/vagas";
+  if (base === "buscar-candidato.php") return "/colaboradores";
+  if (base === "banco-de-talentos.php") return "/talentos";
+  if (base === "cadastrar-candidato.php") return "/talentos/novo";
+  if (base === "relatorio-encaminhamento.php") return "/relatorios/encaminhamentos";
+  if (base === "relatorio-documento-pendente.php") return "/relatorios/documentos";
+  if (base === "relatorio-seguro-de-vida.php") return "/relatorios/seguro";
+  if (base === "calendario-operador.php") return "/relatorios/calendario";
+  if (base === "criar-avaliacao.php") return "/avaliacoes";
+  if (base === "holerite.php") return "/holerite";
+  if (base === "buscar-empresa.php") return "/empresa";
+  if (base === "cadastrar-empresa-filial.php") return "/empresa/filial";
+  if (base === "buscar-usuario.php") return "/usuarios";
+  if (base === "cadastrar-usuario.php") return "/usuarios/novo";
   if (base === "cadastrar-vaga.php" && tipo === "4") return "/vagas/nova?tipo=4";
   if (base === "cadastrar-vaga.php") return "/vagas/nova?tipo=2";
   return `/opcao?link=${encodeURIComponent(link)}`;

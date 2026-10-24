@@ -250,6 +250,164 @@ export class PortalDadosService {
     return lista.sort((a, b) => String(b.vencimento ?? "").localeCompare(String(a.vencimento ?? "")));
   }
 
+  async empresa(usuarioId: string, empresaId: string) {
+    await this.garantir(usuarioId, empresaId);
+    const atual = await this.db.query(`
+      select coalesce(nome_fantasia, razao_social) as nome, cnpj, email, telefone, cidade, uf
+      from dna_work.empresa where id_empresa = $1
+    `, [empresaId]);
+    const filiais = await this.db.query(`
+      select coalesce(nome_fantasia, razao_social) as nome, cnpj, cidade
+      from dna_work.empresa where matriz = $1 order by nome
+    `, [empresaId]);
+    return { ...(atual.rows[0] ?? {}), filiais: filiais.rows };
+  }
+
+  async salvarFilial(usuarioId: string, empresaId: string, body: Record<string, string>) {
+    await this.garantir(usuarioId, empresaId);
+    const id = crypto.randomUUID();
+    await this.db.query(`
+      insert into dna_work.empresa (id_empresa, nome_fantasia, razao_social, cnpj, email, cidade, matriz, tipo_empresa, status)
+      values ($1,$2,$2,$3,$4,$5,$6,2,1)
+    `, [id, body.nome, body.cnpj || null, body.email || null, body.cidade || null, empresaId]);
+    return { id };
+  }
+
+  async usuarios(usuarioId: string, empresaId: string) {
+    await this.garantir(usuarioId, empresaId);
+    const rows = await this.db.query(`
+      select u.nome_u as nome, u.email_u as email, u.telefone_u as telefone,
+             case when u.status = 1 then 'Ativo' else 'Inativo' end as situacao
+      from dna_work.usuario_empresa u
+      where u.empresa_u = $1
+         or exists (select 1 from dna_work.vinculo_empresa_usuario v where v.id_usuario = u.id_u and v.id_empresa = $1)
+      order by u.nome_u
+    `, [empresaId]);
+    return rows.rows;
+  }
+
+  async salvarUsuario(usuarioId: string, empresaId: string, body: Record<string, string>) {
+    await this.garantir(usuarioId, empresaId);
+    if ((body.senha ?? "").length < 6) throw new AppError(422, "SENHA_CURTA", "A senha precisa ter pelo menos 6 caracteres.");
+    const id = crypto.randomUUID();
+    const { hash } = await import("@node-rs/argon2");
+    const { createHash } = await import("node:crypto");
+    await this.db.query(`
+      insert into dna_work.usuario_empresa
+        (id_u, nome_u, email_u, senha_u, senha_hash, telefone_u, empresa_u, status, tipo, data_senha, atualiza_senha)
+      values ($1,$2,$3,$4,$5,$6,$7,1,1,to_char(current_date,'YYYY/MM/DD'),0)
+    `, [id, body.nome, body.email, createHash("md5").update(body.senha).digest("hex"), await hash(body.senha), body.telefone || "", empresaId]);
+    await this.db.query(`insert into dna_work.vinculo_empresa_usuario (id_usuario, id_empresa) values ($1,$2)`, [id, empresaId]);
+    await this.db.query(`
+      insert into dna_work.paginas_usuario_empresa (id_usuario, menu, sub1, sub2, paginas)
+      select $1, menu, sub1, sub2, paginas from dna_work.paginas_usuario_empresa where id_usuario = $2 limit 1
+    `, [id, usuarioId]);
+    return { id };
+  }
+
+  async talentos(usuarioId: string, empresaId: string) {
+    await this.garantir(usuarioId, empresaId);
+    const rows = await this.db.query(`
+      select nome, cpf, email, celular, cidade from dna_work.candidato
+      where id_empresa = $1 order by nome limit 200
+    `, [empresaId]);
+    return rows.rows;
+  }
+
+  async salvarTalento(usuarioId: string, empresaId: string, body: Record<string, string>) {
+    await this.garantir(usuarioId, empresaId);
+    const id = crypto.randomUUID();
+    await this.db.query(`
+      insert into dna_work.candidato (id_candidato, nome, cpf, email, celular, cidade, datacadastro, id_empresa)
+      values ($1,$2,$3,$4,$5,$6,$7,$8)
+    `, [id, body.nome, body.cpf || null, body.email || null, body.celular || null, body.cidade || null, dataLegado(new Date().toISOString().slice(0, 10)), empresaId]);
+    return { id };
+  }
+
+  async encaminhamentos(usuarioId: string, empresaId: string) {
+    await this.garantir(usuarioId, empresaId);
+    const rows = await this.db.query(`
+      select c.nome, v.cargo, e.data, e.data_entrevista, e.hora,
+             case when e.compareceu = '1' then 'Compareceu' when e.reprovado = 'S' then 'Reprovado' else 'Encaminhado' end as situacao
+      from dna_work.emcaminhamento e
+      join dna_work.vaga v on v.id_vaga = e.id_vaga
+      left join dna_work.candidato c on c.id_candidato = e.id_candidato
+      where v.id_empresa = $1
+      order by e.data desc nulls last
+      limit 200
+    `, [empresaId]);
+    return rows.rows;
+  }
+
+  async documentos(usuarioId: string, empresaId: string) {
+    await this.garantir(usuarioId, empresaId);
+    const rows = await this.db.query(`
+      select c.nome, count(d.tipo)::text as documentos
+      from dna_work.conratacaovaga cv
+      join dna_work.candidato c on c.id_candidato = cv.id_candidato
+      left join dna_work.docs_candidatos d on d.id_candidato = c.id_candidato
+      where cv.id_empresa = $1 and cv.status = 1 and coalesce(cv.data_demicao, '') = ''
+      group by c.nome
+      order by c.nome
+    `, [empresaId]);
+    return rows.rows.map((row) => ({ ...row, situacao: Number(row.documentos) > 0 ? "Com documento" : "Pendente" }));
+  }
+
+  async seguro(usuarioId: string, empresaId: string) {
+    await this.garantir(usuarioId, empresaId);
+    const rows = await this.db.query(`
+      select c.nome, v.cargo, cv.datainicio as inicio
+      from dna_work.conratacaovaga cv
+      join dna_work.candidato c on c.id_candidato = cv.id_candidato
+      left join dna_work.vaga v on v.id_vaga = cv.id_vaga
+      where cv.id_empresa = $1 and cv.status = 1 and coalesce(cv.data_demicao, '') = ''
+      order by c.nome
+    `, [empresaId]);
+    return rows.rows;
+  }
+
+  async calendario(usuarioId: string, empresaId: string) {
+    await this.garantir(usuarioId, empresaId);
+    const rows = await this.db.query(`
+      select c.nome, v.cargo, e.data_entrevista as data, e.hora
+      from dna_work.emcaminhamento e
+      join dna_work.vaga v on v.id_vaga = e.id_vaga
+      left join dna_work.candidato c on c.id_candidato = e.id_candidato
+      where v.id_empresa = $1 and coalesce(e.data_entrevista, '') <> ''
+      order by e.data_entrevista desc
+      limit 200
+    `, [empresaId]);
+    return rows.rows;
+  }
+
+  async avaliacoes(usuarioId: string, empresaId: string) {
+    await this.garantir(usuarioId, empresaId);
+    const rows = await this.db.query(`
+      select c.nome, a.ciclo, a.area, a.data,
+             case when a.completou_ciclo = '1' then 'Concluída' else 'Em aberto' end as situacao
+      from dna_work.avaliacao_desepenho a
+      join dna_work.colaborador col on col.id_colaborador = a.id_colaborador
+      left join dna_work.candidato c on c.id_candidato = col.id_candidato
+      where col.id_empresa = $1
+      order by a.data desc nulls last
+      limit 200
+    `, [empresaId]);
+    return rows.rows;
+  }
+
+  async holerites(usuarioId: string, empresaId: string) {
+    await this.garantir(usuarioId, empresaId);
+    const rows = await this.db.query(`
+      select h.nome_candidato as nome, h.cargo, h.copentencia as competencia, h.salario_brudo as bruto, h.total_vencimentos as liquido
+      from dna_work.holerite h
+      join dna_work.vaga v on v.id_vaga = h.id_vaga
+      where v.id_empresa = $1
+      order by h.copentencia desc nulls last
+      limit 200
+    `, [empresaId]);
+    return rows.rows;
+  }
+
   private async proximo(tabela: "ponto_turno_base" | "ponto_carga_base" | "feriados", coluna: "id" | "id_feriado") {
     const linha = await this.db.query<{ id: string }>(`select coalesce(max(${coluna}), 0) + 1 as id from dna_work.${tabela}`);
     return Number(linha.rows[0].id);
