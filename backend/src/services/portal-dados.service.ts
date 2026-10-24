@@ -208,6 +208,48 @@ export class PortalDadosService {
     return rows.rows;
   }
 
+  async faturas(usuarioId: string, empresaId: string, situacao: string) {
+    await this.garantir(usuarioId, empresaId);
+    const novas = await this.db.query<{
+      id: string; valor: string; vencimento: string; pagamento: string | null; link: string | null; situacao: string; competencia: string | null; asaas: string | null;
+    }>(`
+      select id::text, valor::text, vencimento::text, data_pagamento::text as pagamento,
+             url_pagamento as link, situacao, descricao as competencia, asaas_payment_id as asaas
+      from dna_work.cobranca_asaas
+      where id_empresa = $1 and situacao <> 'cancelada'
+    `, [empresaId]);
+    const antigas = await this.db.query<{
+      id: string; valor: string | null; vencimento: string | null; pagamento: string | null; link: string | null; status_fatura: string | null; mes: string | null; ano: string | null; asaas: string | null;
+    }>(`
+      select id_fatura::text as id, valor_final as valor, vencimento_fatura as vencimento, data_pg as pagamento,
+             url_pg as link, status_fatura::text, mes::text, ano::text, id_asaas as asaas
+      from dna_work.fatura
+      where id_empresa = $1 and (tipo_fatura is null or tipo_fatura ilike 'padr%')
+    `, [empresaId]);
+    const jaVeioDoAsaas = new Set(novas.rows.map((item) => item.asaas).filter(Boolean));
+    const lista = [
+      ...novas.rows.map((item) => ({
+        id: item.id,
+        valor: item.valor,
+        vencimento: item.vencimento,
+        pagamento: item.pagamento,
+        link: item.link,
+        situacao: item.situacao === "paga" ? "Paga" : "Aberta",
+        competencia: item.competencia,
+      })),
+      ...antigas.rows.filter((item) => !item.asaas || !jaVeioDoAsaas.has(item.asaas)).map((item) => ({
+        id: item.id,
+        valor: item.valor,
+        vencimento: item.vencimento,
+        pagamento: item.pagamento,
+        link: item.link,
+        situacao: item.status_fatura === "0" ? "Aberta" : "Paga",
+        competencia: item.mes && item.ano ? `${item.mes}/${item.ano}` : null,
+      })),
+    ].filter((item) => situacao === "todas" || (situacao === "paga" ? item.situacao === "Paga" : item.situacao === "Aberta"));
+    return lista.sort((a, b) => String(b.vencimento ?? "").localeCompare(String(a.vencimento ?? "")));
+  }
+
   private async proximo(tabela: "ponto_turno_base" | "ponto_carga_base" | "feriados", coluna: "id" | "id_feriado") {
     const linha = await this.db.query<{ id: string }>(`select coalesce(max(${coluna}), 0) + 1 as id from dna_work.${tabela}`);
     return Number(linha.rows[0].id);

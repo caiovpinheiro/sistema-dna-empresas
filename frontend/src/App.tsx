@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient
 import { Briefcase, Building2, Check, ChevronDown, Circle, Clock, Gauge, GraduationCap, LayoutDashboard, Lock, LogOut, Menu, Settings, User, Users, Wallet, X, type LucideIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { Consulta, Inicio } from "./pages/consultas";
+import { Consulta, Faturas, Inicio } from "./pages/consultas";
 import { CargaNova, ColaboradorNovo, EscalaNova, FeriadoNovo, Listagem, RelatorioPonto, VagaNova } from "./pages/ponto";
 import { Button, Card, Field, Input } from "./components/ui";
 import { ApiError, api } from "./lib/api";
@@ -51,7 +51,7 @@ function Protegido() {
       <Route path="/feriados/novo" element={<Portal sessao={dados} />} />
       <Route path="/ponto/relatorio" element={<Portal sessao={dados} />} />
       <Route path="/vagas/nova" element={<Portal sessao={dados} />} />
-      <Route path="/vagas" element={<Portal sessao={dados} />} />
+      <Route path="/faturas" element={<Portal sessao={dados} />} />
       <Route path="/contratados" element={<Portal sessao={dados} />} />
       <Route path="/opcao" element={<Portal sessao={dados} />} />
       <Route path="*" element={<Navigate to="/" replace />} />
@@ -119,6 +119,7 @@ function Portal({ sessao }: { sessao: Sessao }) {
           {pathname === "/feriados/novo" ? <FeriadoNovo /> : null}
           {pathname === "/ponto/relatorio" ? <RelatorioPonto /> : null}
           {pathname === "/vagas/nova" ? <VagaNova tipo={new URLSearchParams(search).get("tipo") ?? "2"} /> : null}
+          {pathname === "/faturas" ? <Faturas /> : null}
           {pathname === "/vagas" ? <Consulta titulo="Vagas" caminho="/api/v1/empresa/vagas" colunas={[{ chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "cidade", titulo: "Cidade" }, { chave: "situacao", titulo: "Situação" }, { chave: "dataabertura", titulo: "Abertura" }]} /> : null}
           {pathname === "/contratados" ? <Consulta titulo="Contratados" caminho="/api/v1/empresa/contratados" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "inicio", titulo: "Início" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
           {pathname === "/" ? <Inicio /> : null}
@@ -330,7 +331,7 @@ function destinoDoLink(link: string): string {
   if (base === "buscar-feriado.php") return "/feriados";
   if (base === "cadastrar-feriado.php") return "/feriados/novo";
   if (base === "relatorio-ponto-em-massa.php") return "/ponto/relatorio";
-  if (base === "buscar-vagas.php") return "/vagas";
+  if (base === "buscar-faturas.php") return "/faturas";
   if (base === "cadastrar-vaga-estagio.php") return "/vagas/nova?tipo=1";
   if (base === "cadastrar-vaga.php" && tipo === "4") return "/vagas/nova?tipo=4";
   if (base === "cadastrar-vaga.php") return "/vagas/nova?tipo=2";

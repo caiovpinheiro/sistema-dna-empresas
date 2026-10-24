@@ -173,7 +173,10 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   app.post("/api/v1/empresa/feriados", async (request) => ({ success: true, data: await dados.salvarFeriado(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
   app.post("/api/v1/empresa/colaboradores", async (request) => ({ success: true, data: await dados.salvarColaborador(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
   app.post("/api/v1/empresa/vagas", async (request) => ({ success: true, data: await dados.salvarVaga(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
-  app.get("/api/v1/empresa/ponto/relatorio", async (request) => ({ success: true, data: await dados.relatorioPonto(request.user.sub, request.user.empresaId!) }));
+  app.get("/api/v1/empresa/faturas", async (request) => {
+    const situacao = ler(z.object({ situacao: z.enum(["aberta", "paga", "todas"]).optional() }), request.query).situacao ?? "aberta";
+    return { success: true, data: await dados.faturas(request.user.sub, request.user.empresaId!, situacao) };
+  });
 
   await servirFrontend(app);
   return app;
