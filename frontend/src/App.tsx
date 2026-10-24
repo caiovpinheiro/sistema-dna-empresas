@@ -3,6 +3,7 @@ import { Briefcase, Building2, Check, ChevronDown, Circle, Clock, Gauge, Graduat
 import { useEffect, useState, type ReactNode } from "react";
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Consulta, Inicio } from "./pages/consultas";
+import { CargaNova, ColaboradorNovo, EscalaNova, FeriadoNovo, Listagem, RelatorioPonto, VagaNova } from "./pages/ponto";
 import { Button, Card, Field, Input } from "./components/ui";
 import { ApiError, api } from "./lib/api";
 
@@ -41,6 +42,15 @@ function Protegido() {
     <Routes>
       <Route path="/" element={<Portal sessao={dados} />} />
       <Route path="/colaboradores" element={<Portal sessao={dados} />} />
+      <Route path="/colaboradores/novo" element={<Portal sessao={dados} />} />
+      <Route path="/escalas" element={<Portal sessao={dados} />} />
+      <Route path="/escalas/nova" element={<Portal sessao={dados} />} />
+      <Route path="/cargas" element={<Portal sessao={dados} />} />
+      <Route path="/cargas/nova" element={<Portal sessao={dados} />} />
+      <Route path="/feriados" element={<Portal sessao={dados} />} />
+      <Route path="/feriados/novo" element={<Portal sessao={dados} />} />
+      <Route path="/ponto/relatorio" element={<Portal sessao={dados} />} />
+      <Route path="/vagas/nova" element={<Portal sessao={dados} />} />
       <Route path="/vagas" element={<Portal sessao={dados} />} />
       <Route path="/contratados" element={<Portal sessao={dados} />} />
       <Route path="/opcao" element={<Portal sessao={dados} />} />
@@ -57,7 +67,7 @@ function Portal({ sessao }: { sessao: Sessao }) {
   const link = params.get("link");
   const itens = menu.data?.data ?? [];
   const atual = link ? achar(itens, link) : null;
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const empresa = sessao.empresas.find((item) => item.id === sessao.empresaId)?.nome;
   const expandido = aberto || hover;
 
@@ -100,6 +110,15 @@ function Portal({ sessao }: { sessao: Sessao }) {
         </header>
         <main className="mx-auto max-w-5xl px-5 py-6 md:px-8">
           {pathname === "/colaboradores" ? <Consulta titulo="Colaboradores" caminho="/api/v1/empresa/colaboradores" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "datainicio", titulo: "Início" }, { chave: "email", titulo: "E-mail" }, { chave: "celular", titulo: "Celular" }]} /> : null}
+          {pathname === "/colaboradores/novo" ? <ColaboradorNovo /> : null}
+          {pathname === "/escalas" ? <Listagem titulo="Escalas" caminho="/api/v1/empresa/escalas" novo="/escalas/nova" colunas={[{ chave: "nome", titulo: "Nome" }]} /> : null}
+          {pathname === "/escalas/nova" ? <EscalaNova /> : null}
+          {pathname === "/cargas" ? <Listagem titulo="Cargas horárias" caminho="/api/v1/empresa/cargas" novo="/cargas/nova" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "tipo", titulo: "Tipo" }, { chave: "entrada", titulo: "Entrada" }, { chave: "saida", titulo: "Saída" }]} /> : null}
+          {pathname === "/cargas/nova" ? <CargaNova /> : null}
+          {pathname === "/feriados" ? <Listagem titulo="Feriados" caminho="/api/v1/empresa/feriados" novo="/feriados/novo" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "data", titulo: "Data" }]} /> : null}
+          {pathname === "/feriados/novo" ? <FeriadoNovo /> : null}
+          {pathname === "/ponto/relatorio" ? <RelatorioPonto /> : null}
+          {pathname === "/vagas/nova" ? <VagaNova tipo={new URLSearchParams(search).get("tipo") ?? "2"} /> : null}
           {pathname === "/vagas" ? <Consulta titulo="Vagas" caminho="/api/v1/empresa/vagas" colunas={[{ chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "cidade", titulo: "Cidade" }, { chave: "situacao", titulo: "Situação" }, { chave: "dataabertura", titulo: "Abertura" }]} /> : null}
           {pathname === "/contratados" ? <Consulta titulo="Contratados" caminho="/api/v1/empresa/contratados" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "inicio", titulo: "Início" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
           {pathname === "/" ? <Inicio /> : null}
@@ -113,7 +132,7 @@ function Portal({ sessao }: { sessao: Sessao }) {
 
 function Ramo({ item, ativo, expandido, onNavigate, nivel = 0 }: { item: ItemMenu; ativo: string | null; expandido: boolean; onNavigate: () => void; nivel?: number }) {
   const [open, setOpen] = useState(false);
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const Icon = iconeDe(item.label);
   useEffect(() => {
     if (!expandido) setOpen(false);
@@ -121,7 +140,7 @@ function Ramo({ item, ativo, expandido, onNavigate, nivel = 0 }: { item: ItemMen
   const texto = <span className={`overflow-hidden whitespace-nowrap transition-all duration-300 ${expandido ? "max-w-48 opacity-100" : "max-w-0 opacity-0"}`}>{item.label}</span>;
   if (item.link) {
     const href = destinoDoLink(item.link);
-    const marcado = href.startsWith("/opcao") ? ativo === item.link : pathname === href;
+    const marcado = href.startsWith("/opcao") ? ativo === item.link : href.includes("?") ? pathname + search === href : pathname === href;
     return (
       <li>
         <Link to={href} onClick={onNavigate} title={item.label} className={`flex h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold transition duration-200 ${marcado ? "bg-[#5b21b6] text-white" : "text-neutral-700 hover:bg-white hover:shadow-sm"}`}>
@@ -299,11 +318,22 @@ function FundoRoxo({ children, className = "", papel }: { children: ReactNode; c
 }
 
 function destinoDoLink(link: string): string {
-  const base = link.split("?")[0];
+  const [base, query] = link.split("?");
+  const tipo = new URLSearchParams(query ?? "").get("Tipo");
   if (base === "principal.php") return "/";
   if (base === "buscar-candidato-ponto.php") return "/colaboradores";
+  if (base === "cadastrar-colaborador.php") return "/colaboradores/novo";
+  if (base === "buscar-escala.php") return "/escalas";
+  if (base === "cadastrar-escala.php") return "/escalas/nova";
+  if (base === "buscar-carga-horaria.php") return "/cargas";
+  if (base === "cadastrar-carga-horaria.php") return "/cargas/nova";
+  if (base === "buscar-feriado.php") return "/feriados";
+  if (base === "cadastrar-feriado.php") return "/feriados/novo";
+  if (base === "relatorio-ponto-em-massa.php") return "/ponto/relatorio";
   if (base === "buscar-vagas.php") return "/vagas";
-  if (base === "buscar-contratados.php") return "/contratados";
+  if (base === "cadastrar-vaga-estagio.php") return "/vagas/nova?tipo=1";
+  if (base === "cadastrar-vaga.php" && tipo === "4") return "/vagas/nova?tipo=4";
+  if (base === "cadastrar-vaga.php") return "/vagas/nova?tipo=2";
   return `/opcao?link=${encodeURIComponent(link)}`;
 }
 

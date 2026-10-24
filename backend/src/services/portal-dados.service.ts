@@ -1,6 +1,16 @@
 import type { Pool } from "pg";
 import { AppError } from "../lib/errors.js";
 
+function dia(valor: string | undefined) {
+  const numero = Number(valor);
+  return Number.isInteger(numero) && numero > 0 ? numero : null;
+}
+
+function dataLegado(iso: string) {
+  const [ano, mes, dia] = iso.split("-");
+  return ano && mes && dia ? `${ano}/${mes}/${dia}` : iso;
+}
+
 export class PortalDadosService {
   constructor(private readonly db: Pool) {}
 
@@ -82,6 +92,125 @@ export class PortalDadosService {
       inicio: row.datainicio,
       situacao: row.data_demicao || Number(row.status) === 2 ? "Encerrado" : "Ativo",
     }));
+  }
+
+  async escalas(usuarioId: string, empresaId: string) {
+    await this.garantir(usuarioId, empresaId);
+    const rows = await this.db.query(`
+      select id, nome, segunda_feira, terca_feira, quarta_feira, quinta_feira, sexta_feira, sabado, domingo
+      from dna_work.ponto_turno_base
+      where id_empresa = $1
+      order by nome
+    `, [empresaId]);
+    return rows.rows;
+  }
+
+  async salvarEscala(usuarioId: string, empresaId: string, body: Record<string, string>) {
+    await this.garantir(usuarioId, empresaId);
+    const id = await this.proximo("ponto_turno_base", "id");
+    await this.db.query(`
+      insert into dna_work.ponto_turno_base
+        (id, nome, id_empresa, segunda_feira, terca_feira, quarta_feira, quinta_feira, sexta_feira, sabado, domingo)
+      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+    `, [id, body.nome, empresaId, dia(body.segunda), dia(body.terca), dia(body.quarta), dia(body.quinta), dia(body.sexta), dia(body.sabado), dia(body.domingo)]);
+    return { id };
+  }
+
+  async cargas(usuarioId: string, empresaId: string) {
+    await this.garantir(usuarioId, empresaId);
+    const rows = await this.db.query(`
+      select id, nome, tipo, entrada, saida_refeicao, retorno_refeicao, saida, tolerancia, pausa
+      from dna_work.ponto_carga_base
+      where id_empresa = $1
+      order by nome
+    `, [empresaId]);
+    return rows.rows;
+  }
+
+  async salvarCarga(usuarioId: string, empresaId: string, body: Record<string, string>) {
+    await this.garantir(usuarioId, empresaId);
+    const pausa = body.pausa === "1" ? 1 : 0;
+    const saida = body.saida;
+    const id = await this.proximo("ponto_carga_base", "id");
+    await this.db.query(`
+      insert into dna_work.ponto_carga_base
+        (id, id_empresa, nome, tipo, entrada, saida_refeicao, retorno_refeicao, saida, tolerancia, pausa)
+      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+    `, [
+      id, empresaId, body.nome, body.tipo === "Noturno" ? "Noturno" : "Diurno",
+      body.entrada, pausa ? body.saidaRefeicao : saida, pausa ? body.retornoRefeicao : saida, saida, body.tolerancia || "0", pausa,
+    ]);
+    return { id };
+  }
+
+  async feriados(usuarioId: string, empresaId: string) {
+    await this.garantir(usuarioId, empresaId);
+    const rows = await this.db.query(`
+      select id_feriado, nome, data from dna_work.feriados where id_empresa = $1 order by data
+    `, [empresaId]);
+    return rows.rows;
+  }
+
+  async salvarFeriado(usuarioId: string, empresaId: string, body: Record<string, string>) {
+    await this.garantir(usuarioId, empresaId);
+    const id = await this.proximo("feriados", "id_feriado");
+    await this.db.query(`
+      insert into dna_work.feriados (id_feriado, nome, data, id_empresa) values ($1,$2,$3,$4)
+    `, [id, body.nome, dataLegado(body.data), empresaId]);
+    return { id };
+  }
+
+  async salvarColaborador(usuarioId: string, empresaId: string, body: Record<string, string>) {
+    await this.garantir(usuarioId, empresaId);
+    const cpf = body.cpf.replace(/\D/g, "");
+    const existente = cpf
+      ? await this.db.query<{ id_candidato: string }>(`select id_candidato from dna_work.candidato where regexp_replace(coalesce(cpf, ''), '\\D', '', 'g') = $1 limit 1`, [cpf])
+      : { rows: [] };
+    const idCandidato = existente.rows[0]?.id_candidato ?? crypto.randomUUID();
+    if (!existente.rows[0]) {
+      await this.db.query(`
+        insert into dna_work.candidato (id_candidato, nome, cpf, email, celular, datacadastro, id_empresa, colaborador)
+        values ($1,$2,$3,$4,$5,$6,$7,1)
+      `, [idCandidato, body.nome, cpf, body.email || null, body.celular || null, dataLegado(new Date().toISOString().slice(0, 10)), empresaId]);
+    }
+    const idColaborador = crypto.randomUUID();
+    await this.db.query(`
+      insert into dna_work.colaborador
+        (id_colaborador, id_candidato, id_empresa, data_inicio, departamento, cargo, data_cadastro, status_ponto, status_colaborador, carga_base)
+      values ($1,$2,$3,$4,$5,$6,$7,1,1,$8)
+    `, [idColaborador, idCandidato, empresaId, dataLegado(body.inicio), body.departamento || null, body.cargo, dataLegado(new Date().toISOString().slice(0, 10)), body.carga ? Number(body.carga) : null]);
+    return { id: idColaborador };
+  }
+
+  async salvarVaga(usuarioId: string, empresaId: string, body: Record<string, string>) {
+    await this.garantir(usuarioId, empresaId);
+    const tipo = Number(body.tipo);
+    if (![1, 2, 4].includes(tipo)) throw new AppError(422, "TIPO_INVALIDO", "A vaga precisa ser estágio, CLT ou PJ.");
+    const id = crypto.randomUUID();
+    await this.db.query(`
+      insert into dna_work.vaga
+        (id_vaga, id_empresa, cargo, tipo_vaga, salario, cidade, status, dataabertura, comparador, quantidade_posicoes)
+      values ($1,$2,$3,$4,$5,$6,0,$7,$1,1)
+    `, [id, empresaId, body.cargo, tipo, body.salario || null, body.cidade || null, dataLegado(new Date().toISOString().slice(0, 10))]);
+    return { id };
+  }
+
+  async relatorioPonto(usuarioId: string, empresaId: string) {
+    await this.garantir(usuarioId, empresaId);
+    const rows = await this.db.query(`
+      select c.nome, col.cargo, col.departamento, col.data_inicio, carga.nome as carga
+      from dna_work.colaborador col
+      left join dna_work.candidato c on c.id_candidato = col.id_candidato
+      left join dna_work.ponto_carga_base carga on carga.id = col.carga_base
+      where col.id_empresa = $1 and col.status_ponto = 1
+      order by c.nome
+    `, [empresaId]);
+    return rows.rows;
+  }
+
+  private async proximo(tabela: "ponto_turno_base" | "ponto_carga_base" | "feriados", coluna: "id" | "id_feriado") {
+    const linha = await this.db.query<{ id: string }>(`select coalesce(max(${coluna}), 0) + 1 as id from dna_work.${tabela}`);
+    return Number(linha.rows[0].id);
   }
 
   private async garantir(usuarioId: string, empresaId: string) {
