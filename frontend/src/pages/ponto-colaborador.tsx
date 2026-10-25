@@ -34,7 +34,7 @@ export function PontoLoginPage() {
           </span>
           <h1 className="text-center text-xl font-extrabold">Bater ponto</h1>
           <p className="mt-1 text-center text-sm text-slate-500">Use o CPF e a senha do portal do candidato.</p>
-          <input className="mt-6 h-12 w-full rounded-full bg-[#eceff3] px-4 text-sm outline-none focus:ring-4 focus:ring-[#7c3aed]/20" inputMode="numeric" autoComplete="username" required placeholder="CPF" aria-label="CPF" value={cpf} onChange={(event) => setCpf(event.target.value)} />
+          <input className="mt-6 h-12 w-full rounded-full bg-[#eceff3] px-4 text-sm outline-none focus:ring-4 focus:ring-[#7c3aed]/20" inputMode="numeric" autoComplete="username" required placeholder="000.000.000-00" aria-label="CPF" maxLength={14} value={cpf} onChange={(event) => setCpf(mascaraCpf(event.target.value))} />
           <input className="mt-4 h-12 w-full rounded-full bg-[#eceff3] px-4 text-sm outline-none focus:ring-4 focus:ring-[#7c3aed]/20" type="password" autoComplete="current-password" required placeholder="Senha" aria-label="Senha" value={password} onChange={(event) => setPassword(event.target.value)} />
           {erro ? <p className="mt-3 text-sm text-rose-600" role="alert">{erro}</p> : null}
           <button className="mt-6 h-12 w-full rounded-full bg-[#7c3aed] text-sm font-bold tracking-wide text-white transition duration-200 hover:bg-[#6d28d9] active:scale-[0.98] disabled:opacity-60" disabled={login.isPending}>
@@ -160,6 +160,14 @@ export function PontoPage() {
       </div>
     </div>
   );
+}
+
+function mascaraCpf(valor: string) {
+  const digitos = valor.replace(/\D/g, "").slice(0, 11);
+  return digitos
+    .replace(/(\d{3})(\d)/, "$1.$2")
+    .replace(/(\d{3})(\d)/, "$1.$2")
+    .replace(/(\d{3})(\d{1,2})$/, "$1-$2");
 }
 
 function horaSp() {
