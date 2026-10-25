@@ -6,6 +6,7 @@ import { Consulta, Faturas, Inicio } from "./pages/consultas";
 import { CargaNova, ColaboradorNovo, EscalaNova, FeriadoNovo, Formulario, Listagem, RelatorioPonto, VagaNova } from "./pages/ponto";
 import { PontoLoginPage, PontoPage } from "./pages/ponto-colaborador";
 import { Button, Card, Field, Input } from "./components/ui";
+import { FundoLiquido } from "./components/fundo-liquido";
 import { ApiError, api } from "./lib/api";
 
 type Empresa = { id: string; nome: string };
@@ -234,7 +235,7 @@ function LoginPage() {
   }, [entrou, navigate]);
   if (entrou) {
     return (
-      <FundoAcesso>
+      <FundoLiquido>
         <div className="grid w-full max-w-xs justify-items-center rounded-[2rem] bg-white px-6 py-8 text-center shadow-2xl" role="status">
           <video
             className="h-40 w-40 rounded-2xl object-contain sm:h-44 sm:w-44"
@@ -248,11 +249,11 @@ function LoginPage() {
           <p className="mt-4 text-lg font-extrabold text-[#1c1524]">Login realizado</p>
           <p className="text-sm text-[#6f6578]">{entrou}</p>
         </div>
-      </FundoAcesso>
+        </FundoLiquido>
     );
   }
   return (
-    <FundoAcesso>
+    <FundoLiquido>
       <form className="relative w-full max-w-md rounded-[2rem] bg-white px-5 pb-8 pt-16 shadow-[0_24px_50px_rgb(49_10_80_/_18%)] sm:px-8" onSubmit={(event) => { event.preventDefault(); setErro(""); login.mutate(); }}>
         <span className="absolute left-1/2 top-0 z-10 flex h-24 w-32 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-2xl bg-white px-3 shadow-[0_14px_28px_rgb(49_10_80_/_18%)]">
           <img src="/logo-mono.png" alt="DNA Work" className="h-12 w-full object-contain" />
@@ -271,7 +272,7 @@ function LoginPage() {
         </button>
         <Link to="/ponto/login" className="mt-4 block text-center text-sm font-semibold text-[#5b21b6]">Sou colaborador e quero bater ponto</Link>
       </form>
-    </FundoAcesso>
+      </FundoLiquido>
   );
 }
 
@@ -333,19 +334,6 @@ function Painel({ titulo, texto, detalhe }: { titulo: string; texto: string; det
       <p className="mt-3 text-sm leading-6 text-slate-600">{texto}</p>
       {detalhe ? <p className="acao acao-purple mt-4 inline-flex">{detalhe}</p> : null}
     </Card>
-  );
-}
-
-function FundoAcesso({ children }: { children: ReactNode }) {
-  return (
-    <div className="relative min-h-dvh overflow-hidden bg-[#0a001a]">
-      <div className="pointer-events-none fixed inset-0" aria-hidden="true">
-        <span className="aurora-blob aurora-blob-a" />
-        <span className="aurora-blob aurora-blob-b" />
-        <span className="aurora-blob aurora-blob-c" />
-      </div>
-      <div className="login-fundo-conteudo">{children}</div>
-    </div>
   );
 }
 

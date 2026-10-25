@@ -92,6 +92,14 @@ button, a {
   to { transform: translate3d(18vw, 28vh, 0) scale(1.35); }
 }
 
+.login-liquido {
+  background: #1a0530;
+}
+
+.login-liquido .login-fundo-conteudo {
+  min-height: 100dvh;
+}
+
 .login-fundo {
   position: relative;
   isolation: isolate;
