@@ -1,11 +1,11 @@
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from "react";
 
-const buttonBase = "inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md active:translate-y-0 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-sm";
+const buttonBase = "inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition duration-150 disabled:cursor-not-allowed disabled:opacity-50";
 
 const variants = {
-  primary: "bg-[#5b21b6] text-white hover:bg-[#4c1d95]",
-  secondary: "bg-white text-[#24182d] ring-1 ring-slate-200 hover:bg-slate-50",
-  ghost: "text-slate-600 shadow-none hover:bg-white/80 hover:shadow-none",
+  primary: "bg-[#6a4b84] text-white hover:bg-[#593d70]",
+  secondary: "bg-white text-[#24182d] ring-1 ring-[#eadff0] hover:bg-[#fbf8fc]",
+  ghost: "text-[#6a4b84] hover:bg-[#f3e8f5]",
 };
 
 export function Button({ variant = "primary", className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: keyof typeof variants }) {
@@ -13,11 +13,11 @@ export function Button({ variant = "primary", className = "", ...props }: Button
 }
 
 export function Input({ className = "", ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...props} className={`h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none transition duration-200 placeholder:text-slate-400 focus:border-purple-brand focus:ring-4 focus:ring-[#6a4b84]/20 ${className}`} />;
+  return <input {...props} className={`h-10 w-full rounded-lg border border-[#eadff0] bg-white px-3 text-sm outline-none placeholder:text-slate-400 focus:border-[#6a4b84] focus:ring-4 focus:ring-[#6a4b84]/15 ${className}`} />;
 }
 
 export function Select({ className = "", ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
-  return <select {...props} className={`h-11 w-full rounded-xl border border-white/20 bg-white/10 px-3 text-sm text-white transition duration-200 hover:bg-white/20 focus:ring-4 focus:ring-white/30 ${className}`} />;
+  return <select {...props} className={`h-10 w-full rounded-lg border border-[#eadff0] bg-white px-3 text-sm text-[#24182d] outline-none focus:border-[#6a4b84] focus:ring-4 focus:ring-[#6a4b84]/15 ${className}`} />;
 }
 
 export function Field({ label, children }: { label: string; children: ReactNode }) {
@@ -30,5 +30,5 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 }
 
 export function Card({ className = "", children }: { className?: string; children: ReactNode }) {
-  return <section className={`motion-pop rounded-3xl border border-slate-200/80 bg-white p-6 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md ${className}`}>{children}</section>;
+  return <section className={`rounded-xl border border-[#eadff0] bg-white p-4 ${className}`}>{children}</section>;
 }

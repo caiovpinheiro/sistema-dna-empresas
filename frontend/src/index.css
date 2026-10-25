@@ -153,13 +153,37 @@ button, a {
 .press:active { transform: scale(0.97); }
 
 .acao {
-  border-radius: 0.6rem;
-  padding: 0.3rem 0.65rem;
+  border-radius: 0.5rem;
+  padding: 0.25rem 0.55rem;
   font-size: 0.75rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .acao-purple { background: #f3e8f5; color: #6a4b84; }
+.acao-purple:hover { background: #eadcf2; }
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+
+.data-table th {
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid #eadff0;
+  color: #7a6b86;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.data-table td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #f3eef5;
+  vertical-align: middle;
+}
+
+.data-table tbody tr:hover { background: #fbf8fc; }
 
 @media (prefers-reduced-motion: reduce) {
   .nav-sub,

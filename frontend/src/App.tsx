@@ -93,12 +93,12 @@ function Portal({ sessao }: { sessao: Sessao }) {
       <aside
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
-        className={`${aberto ? "fixed inset-y-0 z-50 flex w-72" : "hidden"} flex-col overflow-x-hidden bg-neutral-100 text-neutral-800 shadow-[4px_0_24px_rgb(49_10_80_/_8%)] transition-[width] duration-300 ease-out md:static md:flex md:min-h-screen ${hover ? "md:w-72" : "md:w-[72px]"}`}
+        className={`${aberto ? "fixed inset-y-0 z-50 flex w-80" : "hidden"} flex-col overflow-x-hidden border-r border-[#eadff0] bg-[#fbf9fc] text-[#24182d] transition-[width] duration-300 ease-out md:static md:flex md:min-h-screen ${hover ? "md:w-80" : "md:w-[72px]"}`}
       >
         <div className={`flex items-center py-4 ${expandido ? "gap-3 px-4" : "justify-center px-2"}`}>
           <img src="/logo-mono.png" alt="DNA Work" className={`shrink-0 object-contain ${expandido ? "h-9 w-16" : "h-8 w-12"}`} />
           <div className={`overflow-hidden whitespace-nowrap transition-all duration-300 ${expandido ? "w-auto opacity-100" : "w-0 opacity-0"}`}>
-            <p className="text-xs font-bold tracking-wide uppercase text-[#5b21b6]">DNAWORK</p>
+            <p className="text-xs font-semibold text-[#6a4b84]">DNAWORK</p>
             <h1 className="text-base font-extrabold leading-5">Empresas</h1>
           </div>
           <button className={`rounded-xl p-2 hover:bg-black/5 md:hidden ${expandido ? "ml-auto" : "hidden"}`} aria-label="Fechar" onClick={() => setAberto(false)}><X size={18} /></button>
@@ -108,9 +108,9 @@ function Portal({ sessao }: { sessao: Sessao }) {
           <EmpresaSelect empresas={sessao.empresas} atual={sessao.empresaId} />
         </div>
         <nav className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 py-3" aria-label="Menu da empresa">
-          {menu.isLoading ? <p className="px-2 text-sm text-white/70">Carregando menu…</p> : null}
+          {menu.isLoading ? <p className="px-2 text-sm text-[#7a6b86]">Carregando menu…</p> : null}
           {menu.isError ? <p className="px-2 text-sm">{menu.error instanceof ApiError ? menu.error.message : "Não foi possível carregar o menu."}</p> : null}
-          {!menu.isLoading && !menu.isError && itens.length === 0 ? <p className="px-2 text-sm text-white/70">Nenhuma opção liberada para este usuário.</p> : null}
+          {!menu.isLoading && !menu.isError && itens.length === 0 ? <p className="px-2 text-sm text-[#7a6b86]">Nenhuma opção liberada para este usuário.</p> : null}
           <ul className="grid gap-1">
             {itens.map((item) => <Ramo key={item.id} item={item} ativo={link} expandido={expandido} onNavigate={() => setAberto(false)} />)}
           </ul>
@@ -120,11 +120,11 @@ function Portal({ sessao }: { sessao: Sessao }) {
         </div>
       </aside>
       <div className="min-w-0 flex-1 bg-[#f6f3f8]">
-        <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-slate-200 bg-white/90 px-4 py-3 backdrop-blur">
+        <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-[#eadff0] bg-[#fbf9fc]/90 px-4 backdrop-blur">
           <button className="grid h-10 w-10 place-items-center rounded-xl transition hover:bg-slate-100 active:scale-95 md:hidden" aria-label="Abrir menu" onClick={() => setAberto(true)}><Menu size={18} /></button>
-          <p className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-600">{empresa}</p>
+          <p className="min-w-0 flex-1 truncate text-sm font-semibold text-[#24182d]">{empresa}</p>
         </header>
-        <main className="mx-auto max-w-5xl px-5 py-6 md:px-8">
+        <main className="mx-auto max-w-6xl px-5 py-6 md:px-8">
           {pathname === "/colaboradores" ? <Consulta titulo="Colaboradores" caminho="/api/v1/empresa/colaboradores" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "datainicio", titulo: "Início" }, { chave: "email", titulo: "E-mail" }, { chave: "celular", titulo: "Celular" }]} /> : null}
           {pathname === "/colaboradores/novo" ? <ColaboradorNovo /> : null}
           {pathname === "/escalas" ? <Listagem titulo="Escalas" caminho="/api/v1/empresa/escalas" novo="/escalas/nova" colunas={[{ chave: "nome", titulo: "Nome" }]} /> : null}
@@ -150,7 +150,7 @@ function Portal({ sessao }: { sessao: Sessao }) {
           {pathname === "/faturas" ? <Faturas /> : null}
           {pathname === "/vagas" ? <Consulta titulo="Vagas" caminho="/api/v1/empresa/vagas" colunas={[{ chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "cidade", titulo: "Cidade" }, { chave: "situacao", titulo: "Situação" }, { chave: "dataabertura", titulo: "Abertura" }]} /> : null}
           {pathname === "/contratados" ? <Consulta titulo="Contratados" caminho="/api/v1/empresa/contratados" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "inicio", titulo: "Início" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
-          {pathname === "/" ? <Inicio /> : null}
+          {pathname === "/" ? <Inicio acessos={acessosLiberados(itens)} /> : null}
           {pathname === "/opcao" && link && !atual ? <Painel titulo="Opção não liberada" texto="Esta tela não faz parte das opções deste usuário." /> : null}
           {pathname === "/opcao" && atual ? <Painel titulo={atual.label} texto="Esta opção ainda será ligada. O nome é o mesmo do portal que a empresa já usa." detalhe={atual.link ?? undefined} /> : null}
         </main>
@@ -166,13 +166,13 @@ function Ramo({ item, ativo, expandido, onNavigate, nivel = 0 }: { item: ItemMen
   useEffect(() => {
     if (!expandido) setOpen(false);
   }, [expandido]);
-  const texto = <span className={`overflow-hidden whitespace-nowrap transition-all duration-300 ${expandido ? "max-w-48 opacity-100" : "max-w-0 opacity-0"}`}>{item.label}</span>;
+  const texto = <span className={`overflow-hidden whitespace-nowrap transition-all duration-300 ${expandido ? "max-w-56 opacity-100" : "max-w-0 opacity-0"}`}>{item.label}</span>;
   if (item.link) {
     const href = destinoDoLink(item.link);
     const marcado = href.startsWith("/opcao") ? ativo === item.link : href.includes("?") ? pathname + search === href : pathname === href;
     return (
       <li>
-        <Link to={href} onClick={onNavigate} title={item.label} className={`flex h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold transition duration-200 ${marcado ? "bg-[#5b21b6] text-white" : "text-neutral-700 hover:bg-white hover:shadow-sm"}`}>
+        <Link to={href} onClick={onNavigate} title={item.label} className={`flex h-10 items-center gap-3 rounded-lg px-2.5 text-[13px] font-semibold transition duration-150 ${marcado ? "bg-[#f3e8f5] text-[#6a4b84] shadow-[inset_2px_0_0_#6a4b84]" : "text-[#3d2c48] hover:bg-white"}`}>
           {nivel === 0 ? <Icon size={18} className="shrink-0" /> : <span className="ml-1 h-1.5 w-1.5 shrink-0 rounded-full bg-current" />}
           {texto}
         </Link>
@@ -181,7 +181,7 @@ function Ramo({ item, ativo, expandido, onNavigate, nivel = 0 }: { item: ItemMen
   }
   return (
     <li className="grid gap-1">
-      <button type="button" aria-expanded={open && expandido} title={item.label} onClick={() => setOpen((value) => !value)} className="flex h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-semibold text-neutral-700 transition duration-200 hover:bg-white hover:shadow-sm">
+      <button type="button" aria-expanded={open && expandido} title={item.label} onClick={() => setOpen((value) => !value)} className="flex h-10 w-full items-center gap-3 rounded-lg px-2.5 text-[13px] font-semibold text-[#3d2c48] transition duration-150 hover:bg-white">
         <Icon size={18} className="shrink-0" />
         {texto}
         <ChevronDown size={16} className={`ml-auto shrink-0 transition duration-200 ${expandido ? "" : "w-0 overflow-hidden opacity-0"} ${open ? "" : "-rotate-90"}`} />
@@ -315,7 +315,7 @@ function Sair({ compacto = false }: { compacto?: boolean }) {
     },
   });
   return (
-    <button className="flex h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-semibold text-neutral-700 transition duration-200 hover:bg-white hover:shadow-sm" onClick={() => sair.mutate()} title="Sair">
+    <button className="flex h-10 w-full items-center gap-3 rounded-lg px-2.5 text-[13px] font-semibold text-[#3d2c48] transition duration-150 hover:bg-white" onClick={() => sair.mutate()} title="Sair">
       <LogOut size={18} className="shrink-0" />
       <span className={`overflow-hidden whitespace-nowrap transition-all duration-300 ${compacto ? "max-w-0 opacity-0" : "max-w-24 opacity-100"}`}>Sair</span>
     </button>
@@ -373,6 +373,32 @@ function EmpresaDados() {
       </div>
     </section>
   );
+}
+
+function acessosLiberados(itens: ItemMenu[]) {
+  const nomes = new Map<string, string>([
+    ["/colaboradores", "Colaboradores"],
+    ["/vagas", "Vagas"],
+    ["/ponto/relatorio", "Ponto"],
+    ["/faturas", "Faturas"],
+    ["/relatorios/encaminhamentos", "Encaminhados"],
+    ["/relatorios/documentos", "Documentos"],
+    ["/relatorios/seguro", "Seguro"],
+    ["/relatorios/calendario", "Calendário"],
+  ]);
+  const achados: Array<{ href: string; label: string }> = [];
+  const visitar = (lista: ItemMenu[]) => {
+    for (const item of lista) {
+      if (item.link) {
+        const href = destinoDoLink(item.link);
+        const label = nomes.get(href);
+        if (label && !achados.some((acesso) => acesso.href === href)) achados.push({ href, label });
+      }
+      if (item.children.length) visitar(item.children);
+    }
+  };
+  visitar(itens);
+  return achados;
 }
 
 function destinoDoLink(link: string): string {
