@@ -6,6 +6,7 @@ import { Consulta, Faturas, Inicio } from "./pages/consultas";
 import { CargaNova, ColaboradorNovo, EscalaNova, FeriadoNovo, Formulario, Listagem, RelatorioPonto, VagaNova } from "./pages/ponto";
 import { PontoLoginPage, PontoPage } from "./pages/ponto-colaborador";
 import { Button, Card, Field, Input } from "./components/ui";
+import { AnimatedGradient } from "@/components/ui/animated-gradient";
 import { ApiError, api } from "./lib/api";
 
 type Empresa = { id: string; nome: string };
@@ -88,7 +89,8 @@ function Portal({ sessao }: { sessao: Sessao }) {
   const expandido = aberto || hover;
 
   return (
-    <div className="flex min-h-screen">
+    <div className="relative flex min-h-screen">
+      <AnimatedGradient className="pointer-events-none fixed inset-0 -z-10" config={{ preset: "Aurora" }} />
       {aberto ? <button aria-label="Fechar menu" className="fixed inset-0 z-40 bg-[#24182d]/40 md:hidden" onClick={() => setAberto(false)} /> : null}
       <aside
         onMouseEnter={() => setHover(true)}
@@ -118,7 +120,7 @@ function Portal({ sessao }: { sessao: Sessao }) {
           <Sair compacto={!expandido} />
         </div>
       </aside>
-      <div className="min-w-0 flex-1 bg-[#f4f2f5]">
+      <div className="min-w-0 flex-1">
         <header className="sticky top-0 z-30 flex h-14 items-center gap-3 px-5 md:px-8">
           <button className="grid h-9 w-9 place-items-center rounded-lg hover:bg-white md:hidden" aria-label="Abrir menu" onClick={() => setAberto(true)}><Menu size={18} /></button>
           <p className="min-w-0 flex-1 truncate text-sm text-[#6f6578]">{empresa}</p>
