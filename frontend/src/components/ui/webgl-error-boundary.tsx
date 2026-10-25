@@ -46,14 +46,13 @@ export function WebGLFallback({
 }: WebGLFallbackProps) {
   return (
     <div
-      className={cn(
-        "flex h-full w-full items-center justify-center bg-gradient-to-br from-zinc-950 via-slate-900 to-zinc-900 px-4 text-center text-sm text-white/75",
-        className,
-      )}
-      role="status"
-      aria-live="polite"
+      className={cn("aurora-fallback", className)}
+      role="presentation"
     >
-      {message ? <p>{message}</p> : null}
+      <span className="aurora-blob aurora-blob-a" />
+      <span className="aurora-blob aurora-blob-b" />
+      <span className="aurora-blob aurora-blob-c" />
+      {message ? <p className="relative z-10 px-4 text-center text-sm text-white/75">{message}</p> : null}
     </div>
   );
 }

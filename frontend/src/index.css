@@ -36,6 +36,57 @@ button, a {
   to { transform: scale(1.75); opacity: 0; }
 }
 
+.aurora-fallback {
+  overflow: hidden;
+  background: #0a001a;
+}
+
+.aurora-blob {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(48px);
+  will-change: transform;
+  animation: aurora-drift 16s ease-in-out infinite alternate;
+}
+
+.aurora-blob-a {
+  width: 72vmax;
+  height: 72vmax;
+  top: -24%;
+  left: -16%;
+  background: #1a0b2e;
+}
+
+.aurora-blob-b {
+  width: 64vmax;
+  height: 64vmax;
+  right: -18%;
+  bottom: -28%;
+  background: #f20089;
+  opacity: 0.72;
+  animation-duration: 22s;
+}
+
+.aurora-blob-c {
+  width: 42vmax;
+  height: 42vmax;
+  top: 18%;
+  left: 34%;
+  background: #7b2cbf;
+  opacity: 0.6;
+  animation-duration: 13s;
+  animation-direction: alternate-reverse;
+}
+
+@keyframes aurora-drift {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to { transform: translate3d(10%, -8%, 0) scale(1.18); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora-blob { animation: none; }
+}
+
 .login-fundo {
   position: relative;
   isolation: isolate;
