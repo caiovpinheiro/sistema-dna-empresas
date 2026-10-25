@@ -7,26 +7,31 @@ type Linha = Record<string, string | number | null>;
 
 export function Listagem({ titulo, caminho, novo, colunas }: { titulo: string; caminho: string; novo: string; colunas: Array<{ chave: string; titulo: string }> }) {
   const lista = useQuery({ queryKey: [caminho], queryFn: () => api<Linha[]>(caminho) });
-  const linhas = lista.data?.data ?? [];
+  const linhas = Array.isArray(lista.data?.data) ? lista.data.data : [];
   const navigate = useNavigate();
   return (
     <section className="grid gap-4">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-2xl font-extrabold">{titulo}</h2>
-        <button className="rounded-xl bg-[#5b21b6] px-4 py-2 text-sm font-bold text-white" onClick={() => navigate(novo)}>Cadastrar</button>
+        <div>
+          <h2 className="text-xl font-semibold tracking-tight text-[#24182d]">{titulo}</h2>
+          {!lista.isLoading && !lista.isError ? <p className="text-sm text-[#6f6578]">{linhas.length === 1 ? "1 registro" : `${linhas.length} registros`}</p> : null}
+        </div>
+        <button className="rounded-lg bg-[#6a4b84] px-4 py-2 text-sm font-semibold text-white hover:bg-[#593d70]" onClick={() => navigate(novo)}>Cadastrar</button>
       </div>
-      <div className="overflow-x-auto rounded-2xl bg-white shadow-sm">
+      {lista.isLoading ? <p className="text-sm text-[#7a6b86]">Carregando…</p> : null}
+      {lista.isError ? <p className="text-sm text-rose-700">{lista.error instanceof ApiError ? lista.error.message : "Não foi possível carregar esta lista."}</p> : null}
+      <div className="overflow-x-auto rounded-xl bg-white text-[#24182d] ring-1 ring-[#eadff0]">
         <table className="w-full min-w-[520px] text-left text-sm">
-          <thead className="text-xs uppercase text-slate-400"><tr>{colunas.map((coluna) => <th key={coluna.chave} className="px-4 py-3">{coluna.titulo}</th>)}</tr></thead>
+          <thead className="text-[#6f6578]"><tr>{colunas.map((coluna) => <th key={coluna.chave} className="px-4 py-3 font-medium">{coluna.titulo}</th>)}</tr></thead>
           <tbody>
             {linhas.map((linha, index) => (
-              <tr key={index} className="border-t border-slate-100">
+              <tr key={String(linha.id ?? index)} className="border-t border-[#f0ebf3]">
                 {colunas.map((coluna) => <td key={coluna.chave} className="px-4 py-3">{linha[coluna.chave] ?? "—"}</td>)}
               </tr>
             ))}
           </tbody>
         </table>
-        {!lista.isLoading && linhas.length === 0 ? <p className="px-4 py-6 text-sm text-slate-500">Nenhum registro desta empresa.</p> : null}
+        {!lista.isLoading && !lista.isError && linhas.length === 0 ? <p className="px-4 py-6 text-sm text-[#6f6578]">Nenhum registro desta empresa.</p> : null}
       </div>
     </section>
   );

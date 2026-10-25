@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { Pool } from "pg";
 import { AppError } from "../lib/errors.js";
 
@@ -276,33 +277,59 @@ export class PortalDadosService {
   async usuarios(usuarioId: string, empresaId: string) {
     await this.garantir(usuarioId, empresaId);
     const rows = await this.db.query(`
-      select u.nome_u as nome, u.email_u as email, u.telefone_u as telefone,
+      select u.id_u as id, u.nome_u as nome, u.email_u as email, u.telefone_u as telefone,
              case when u.status = 1 then 'Ativo' else 'Inativo' end as situacao
       from dna_work.usuario_empresa u
       where u.empresa_u = $1
-         or exists (select 1 from dna_work.vinculo_empresa_usuario v where v.id_usuario = u.id_u and v.id_empresa = $1)
+         or u.id_u = $2
+         or exists (
+           select 1 from dna_work.vinculo_empresa_usuario v
+           where v.id_usuario = u.id_u and v.id_empresa = $1
+         )
       order by u.nome_u
-    `, [empresaId]);
+    `, [empresaId, usuarioId]);
     return rows.rows;
   }
 
   async salvarUsuario(usuarioId: string, empresaId: string, body: Record<string, string>) {
     await this.garantir(usuarioId, empresaId);
-    if ((body.senha ?? "").length < 6) throw new AppError(422, "SENHA_CURTA", "A senha precisa ter pelo menos 6 caracteres.");
+    const nome = body.nome?.trim() ?? "";
+    const email = body.email?.trim().toLowerCase() ?? "";
+    const senha = body.senha ?? "";
+    const telefone = (body.telefone ?? "").trim().slice(0, 20);
+    if (nome.length < 2) throw new AppError(422, "NOME_CURTO", "Informe o nome do usuário.");
+    if (!email.includes("@")) throw new AppError(422, "EMAIL_INVALIDO", "Informe um e-mail válido.");
+    if (senha.length < 6) throw new AppError(422, "SENHA_CURTA", "A senha precisa ter pelo menos 6 caracteres.");
     const id = crypto.randomUUID();
     const { hash } = await import("@node-rs/argon2");
-    const { createHash } = await import("node:crypto");
-    await this.db.query(`
-      insert into dna_work.usuario_empresa
-        (id_u, nome_u, email_u, senha_u, senha_hash, telefone_u, empresa_u, status, tipo, data_senha, atualiza_senha)
-      values ($1,$2,$3,$4,$5,$6,$7,1,1,to_char(current_date,'YYYY/MM/DD'),0)
-    `, [id, body.nome, body.email, createHash("md5").update(body.senha).digest("hex"), await hash(body.senha), body.telefone || "", empresaId]);
-    await this.db.query(`insert into dna_work.vinculo_empresa_usuario (id_usuario, id_empresa) values ($1,$2)`, [id, empresaId]);
-    await this.db.query(`
-      insert into dna_work.paginas_usuario_empresa (id_usuario, menu, sub1, sub2, paginas)
-      select $1, menu, sub1, sub2, paginas from dna_work.paginas_usuario_empresa where id_usuario = $2 limit 1
-    `, [id, usuarioId]);
-    return { id };
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`
+        insert into dna_work.usuario_empresa
+          (id_u, nome_u, email_u, senha_u, senha_hash, telefone_u, empresa_u, status, tipo, data_senha, atualiza_senha)
+        values ($1,$2,$3,$4,$5,$6,$7,1,1,to_char(current_date,'YYYY/MM/DD'),0)
+      `, [id, nome, email, crypto.createHash("md5").update(senha).digest("hex"), await hash(senha), telefone, empresaId]);
+      await client.query(`insert into dna_work.vinculo_empresa_usuario (id_usuario, id_empresa) values ($1,$2)`, [id, empresaId]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if ((error as { code?: string }).code === "23505") {
+        throw new AppError(409, "USUARIO_DUPLICADO", "Já existe um usuário com estes dados.");
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+    try {
+      await this.db.query(`
+        insert into dna_work.paginas_usuario_empresa (id_usuario, menu, sub1, sub2, paginas)
+        select $1, menu, sub1, sub2, paginas from dna_work.paginas_usuario_empresa where id_usuario = $2 limit 1
+      `, [id, usuarioId]);
+    } catch {
+      // O usuário já está na empresa. A cópia do menu não pode apagar o cadastro.
+    }
+    return { id, nome, email };
   }
 
   async talentos(usuarioId: string, empresaId: string) {
