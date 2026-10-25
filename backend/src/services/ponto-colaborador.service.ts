@@ -25,7 +25,7 @@ type ColaboradorPonto = {
   id_empresa: string;
   nome: string;
   empresa: string;
-  pin: string | null;
+  pin: string | number | null;
   cpf: string | null;
 };
 
@@ -89,7 +89,7 @@ export class PontoColaboradorService {
 
   async bater(idColaborador: string, pin: string, confirmar: boolean, latitude: number | null, longitude: number | null, dispositivo: string) {
     const pessoa = await this.pessoa(idColaborador);
-    if (!pessoa.pin || pessoa.pin.trim() !== pin.trim()) throw new AppError(422, "PIN_INVALIDO", "PIN inválido.");
+    if (!pessoa.pin || String(pessoa.pin).trim() !== pin.trim()) throw new AppError(422, "PIN_INVALIDO", "PIN inválido.");
     const agora = agoraSp();
     const bloqueio = await this.bloqueio(idColaborador, agora.legado);
     if (bloqueio) throw new AppError(409, "PONTO_BLOQUEADO", bloqueio);
