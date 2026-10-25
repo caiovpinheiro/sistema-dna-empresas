@@ -14,8 +14,10 @@ import { AppError } from "./lib/errors.js";
 import { pingServico, tokenDoServico } from "./lib/servico.js";
 import { PortalEmpresaService, type SessaoEmpresa } from "./services/portal-empresa.service.js";
 import { PortalDadosService } from "./services/portal-dados.service.js";
+import { PontoColaboradorService } from "./services/ponto-colaborador.service.js";
 
 const COOKIE = "dnawork_empresa";
+const COOKIE_PONTO = "dnawork_ponto";
 
 type EmpresaToken = {
   sub: string;
@@ -32,9 +34,19 @@ declare module "@fastify/jwt" {
   }
 }
 
+type PontoToken = {
+  sub: string;
+  role: "ponto";
+  nome: string;
+  empresaId: string;
+};
+
 declare module "fastify" {
   interface FastifyInstance {
     authenticate: (request: FastifyRequest) => Promise<void>;
+  }
+  interface FastifyRequest {
+    pontoColaborador: PontoToken | null;
   }
 }
 
@@ -42,11 +54,12 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   const app = Fastify({
     logger: process.env.NODE_ENV === "test" ? false : {
       level: "info",
-      redact: ["req.headers.authorization", "req.headers.cookie", "req.body.password", "req.headers.x-service-token"],
+      redact: ["req.headers.authorization", "req.headers.cookie", "req.body.password", "req.body.pin", "req.headers.x-service-token"],
     },
   });
   const portal = new PortalEmpresaService(db);
   const dados = new PortalDadosService(db);
+  const ponto = new PontoColaboradorService(db);
 
   app.setErrorHandler((error: unknown, request, reply) => {
     if (error instanceof AppError) {
@@ -76,6 +89,8 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
     cookie: { cookieName: COOKIE, signed: false },
   });
 
+  app.decorateRequest("pontoColaborador", null);
+
   app.decorate("authenticate", async (request: FastifyRequest) => {
     try {
       await request.jwtVerify();
@@ -89,7 +104,11 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
 
   app.addHook("onRequest", async (request) => {
     const url = request.url.split("?")[0];
-    if (request.method === "OPTIONS" || url === "/health" || url === "/api/v1/empresa/login" || url === "/api/v1/servico/ping" || url === "/api/v1/servico/interno") return;
+    if (request.method === "OPTIONS" || url === "/health" || url === "/api/v1/empresa/login" || url === "/api/v1/ponto/login" || url === "/api/v1/servico/ping" || url === "/api/v1/servico/interno") return;
+    if (url.startsWith("/api/v1/ponto")) {
+      await autenticarPonto(app, request);
+      return;
+    }
     if (url.startsWith("/api/")) await app.authenticate(request);
   });
 
@@ -190,12 +209,53 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
     return { success: true, data: await dados.faturas(request.user.sub, request.user.empresaId!, situacao) };
   });
 
+  app.post("/api/v1/ponto/login", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
+    const body = ler(z.object({ cpf: z.string().trim().min(11), password: z.string().min(1).max(200) }), request.body);
+    const pessoa = await ponto.login(body.cpf, body.password);
+    const token = app.jwt.sign({ sub: pessoa.id_colaborador, role: "ponto", nome: pessoa.nome, empresaId: pessoa.id_empresa } as unknown as EmpresaToken);
+    reply.setCookie(COOKIE_PONTO, token, cookieOptions(config));
+    return { success: true, data: { nome: pessoa.nome, empresa: pessoa.empresa } };
+  });
+  app.post("/api/v1/ponto/logout", async (_request, reply) => {
+    reply.clearCookie(COOKIE_PONTO, { path: "/" });
+    return { success: true, data: { ok: true } };
+  });
+  app.get("/api/v1/ponto/painel", async (request) => ({
+    success: true,
+    data: await ponto.painel(request.pontoColaborador!.sub),
+  }));
+  app.post("/api/v1/ponto/bater", async (request) => {
+    const body = ler(z.object({
+      pin: z.string().trim().min(1).max(20),
+      confirmar: z.boolean().optional(),
+      latitude: z.number().finite().optional(),
+      longitude: z.number().finite().optional(),
+    }), request.body);
+    const dispositivo = String(request.headers["user-agent"] ?? "").slice(0, 180);
+    return {
+      success: true,
+      data: await ponto.bater(request.pontoColaborador!.sub, body.pin, body.confirmar === true, body.latitude ?? null, body.longitude ?? null, dispositivo),
+    };
+  });
+
   await servirFrontend(app);
   return app;
 }
 
 function payloadDe(sessao: SessaoEmpresa): EmpresaToken {
   return { sub: sessao.id, email: sessao.email, role: "empresa", nome: sessao.nome, empresaId: sessao.empresaId };
+}
+
+async function autenticarPonto(app: FastifyInstance, request: FastifyRequest) {
+  const token = request.cookies[COOKIE_PONTO];
+  if (!token) throw new AppError(401, "NAO_AUTENTICADO", "Autenticação necessária.");
+  try {
+    const dados = app.jwt.verify<PontoToken>(token);
+    if (dados.role !== "ponto" || !dados.sub) throw new Error("papel");
+    request.pontoColaborador = dados;
+  } catch {
+    throw new AppError(401, "NAO_AUTENTICADO", "Autenticação necessária.");
+  }
 }
 
 function ler<T>(schema: z.ZodType<T>, body: unknown): T {

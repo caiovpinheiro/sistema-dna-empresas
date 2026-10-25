@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Consulta, Faturas, Inicio } from "./pages/consultas";
 import { CargaNova, ColaboradorNovo, EscalaNova, FeriadoNovo, Formulario, Listagem, RelatorioPonto, VagaNova } from "./pages/ponto";
+import { PontoLoginPage, PontoPage } from "./pages/ponto-colaborador";
 import { Button, Card, Field, Input } from "./components/ui";
 import { ApiError, api } from "./lib/api";
 
@@ -25,6 +26,8 @@ export function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/ponto/login" element={<PontoLoginPage />} />
+          <Route path="/ponto" element={<PontoPage />} />
           <Route path="/*" element={<Protegido />} />
         </Routes>
       </BrowserRouter>
@@ -262,6 +265,7 @@ function LoginPage() {
         <button className="mt-6 h-12 w-full rounded-full bg-[#7c3aed] text-sm font-bold tracking-wide text-white transition duration-200 hover:bg-[#6d28d9] active:scale-[0.98] disabled:opacity-60" disabled={login.isPending}>
           {login.isPending ? "ENTRANDO…" : "ENTRAR"}
         </button>
+        <Link to="/ponto/login" className="mt-4 block text-center text-sm font-semibold text-[#5b21b6]">Sou colaborador e quero bater ponto</Link>
       </form>
     </TelaCentral>
   );
