@@ -54,7 +54,7 @@ button, a {
   top: -10%;
   left: -20%;
   background: #2a0a4a;
-  animation: aurora-a 9s ease-in-out infinite alternate;
+  animation: aurora-a 9s ease-in-out infinite alternate !important;
 }
 
 .aurora-blob-b {
@@ -64,7 +64,7 @@ button, a {
   bottom: -18%;
   background: #f20089;
   opacity: 0.9;
-  animation: aurora-b 7s ease-in-out infinite alternate;
+  animation: aurora-b 7s ease-in-out infinite alternate !important;
 }
 
 .aurora-blob-c {
@@ -74,7 +74,7 @@ button, a {
   left: 20%;
   background: #7b2cbf;
   opacity: 0.75;
-  animation: aurora-c 11s ease-in-out infinite alternate;
+  animation: aurora-c 11s ease-in-out infinite alternate !important;
 }
 
 @keyframes aurora-a {
@@ -90,10 +90,6 @@ button, a {
 @keyframes aurora-c {
   from { transform: translate3d(0, 0, 0); }
   to { transform: translate3d(18vw, 28vh, 0) scale(1.35); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .aurora-blob { animation: none; }
 }
 
 .login-fundo {

@@ -6,7 +6,6 @@ import { Consulta, Faturas, Inicio } from "./pages/consultas";
 import { CargaNova, ColaboradorNovo, EscalaNova, FeriadoNovo, Formulario, Listagem, RelatorioPonto, VagaNova } from "./pages/ponto";
 import { PontoLoginPage, PontoPage } from "./pages/ponto-colaborador";
 import { Button, Card, Field, Input } from "./components/ui";
-import { AnimatedGradient } from "@/components/ui/animated-gradient";
 import { ApiError, api } from "./lib/api";
 
 type Empresa = { id: string; nome: string };
@@ -249,8 +248,12 @@ function LoginPage() {
     );
   }
   return (
-    <div className="relative min-h-screen">
-      <AnimatedGradient className="pointer-events-none fixed inset-0 -z-10" config={{ preset: "Aurora" }} />
+    <div className="relative min-h-screen overflow-hidden bg-[#0a001a]">
+      <div className="pointer-events-none fixed inset-0" aria-hidden="true">
+        <span className="aurora-blob aurora-blob-a" />
+        <span className="aurora-blob aurora-blob-b" />
+        <span className="aurora-blob aurora-blob-c" />
+      </div>
       <div className="login-fundo-conteudo">
       <form className="relative mt-12 w-full max-w-md rounded-[2rem] bg-white px-8 pb-8 pt-16 shadow-[0_24px_50px_rgb(49_10_80_/_18%)]" onSubmit={(event) => { event.preventDefault(); setErro(""); login.mutate(); }}>
         <span className="absolute left-1/2 top-0 z-10 flex h-24 w-32 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-2xl bg-white px-3 shadow-[0_14px_28px_rgb(49_10_80_/_18%)]">
