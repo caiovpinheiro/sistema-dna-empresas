@@ -19,8 +19,19 @@ export class PortalDadosService {
     await this.garantir(usuarioId, empresaId);
     const contagem = await this.db.query<{ ativos: string; vagas: string; contratos: string }>(`
       select
-        (select count(*) from dna_work.conratacaovaga
-          where id_empresa = $1 and status = 1 and coalesce(data_demicao, '') = '')::text as ativos,
+        (select count(distinct pessoa)::text from (
+          select cv.id_candidato as pessoa
+          from dna_work.conratacaovaga cv
+          left join dna_work.vaga v on v.id_vaga = cv.id_vaga
+          where coalesce(nullif(btrim(cv.id_empresa), ''), v.id_empresa) = $1
+            and cv.status = 1
+            and nullif(btrim(cv.data_demicao), '') is null
+          union
+          select col.id_candidato
+          from dna_work.colaborador col
+          where col.id_empresa = $1
+            and coalesce(col.status_colaborador, 1) = 1
+        ) pessoas) as ativos,
         (select count(*) from dna_work.vaga
           where id_empresa = $1 and coalesce(status, 0) <> 2)::text as vagas,
         (select count(*) from dna_work.conratacaovaga where id_empresa = $1)::text as contratos
@@ -41,17 +52,33 @@ export class PortalDadosService {
   async colaboradores(usuarioId: string, empresaId: string, busca: string) {
     await this.garantir(usuarioId, empresaId);
     const rows = await this.db.query(`
-      select c.nome, c.email, c.celular, v.cargo, m.descricao as contrato, cv.datainicio
-      from dna_work.conratacaovaga cv
-      join dna_work.candidato c on c.id_candidato = cv.id_candidato
-      left join dna_work.vaga v on v.id_vaga = cv.id_vaga
-      left join dna_work.modalidade_vaga m on m.id = v.tipo_vaga
-      where cv.id_empresa = $1
-        and cv.status = 1
-        and coalesce(cv.data_demicao, '') = ''
-        and ($2 = '' or c.nome ilike $3 or coalesce(v.cargo, '') ilike $3)
-      order by c.nome
-      limit 200
+      select nome, email, celular, cargo, contrato, datainicio, situacao
+      from (
+        select c.nome, c.email, c.celular, v.cargo, m.descricao as contrato, cv.datainicio,
+               case when cv.status = 2 or nullif(btrim(cv.data_demicao), '') is not null then 'Encerrado' else 'Ativo' end as situacao
+        from dna_work.conratacaovaga cv
+        join dna_work.candidato c on c.id_candidato = cv.id_candidato
+        left join dna_work.vaga v on v.id_vaga = cv.id_vaga
+        left join dna_work.modalidade_vaga m on m.id = v.tipo_vaga
+        where coalesce(nullif(btrim(cv.id_empresa), ''), v.id_empresa) = $1
+          and ($2 = '' or c.nome ilike $3 or coalesce(v.cargo, '') ilike $3)
+        union all
+        select c.nome, c.email, c.celular, col.cargo, null::text, col.data_inicio,
+               case when col.status_colaborador = 1 then 'Ativo' else 'Inativo' end
+        from dna_work.colaborador col
+        join dna_work.candidato c on c.id_candidato = col.id_candidato
+        where col.id_empresa = $1
+          and not exists (
+            select 1
+            from dna_work.conratacaovaga cv
+            left join dna_work.vaga v on v.id_vaga = cv.id_vaga
+            where cv.id_candidato = col.id_candidato
+              and coalesce(nullif(btrim(cv.id_empresa), ''), v.id_empresa) = col.id_empresa
+          )
+          and ($2 = '' or c.nome ilike $3 or coalesce(col.cargo, '') ilike $3)
+      ) pessoas
+      order by nome
+      limit 500
     `, [empresaId, busca, `%${busca}%`]);
     return rows.rows;
   }
@@ -81,7 +108,7 @@ export class PortalDadosService {
       join dna_work.candidato c on c.id_candidato = cv.id_candidato
       left join dna_work.vaga v on v.id_vaga = cv.id_vaga
       left join dna_work.modalidade_vaga m on m.id = v.tipo_vaga
-      where cv.id_empresa = $1
+      where coalesce(nullif(btrim(cv.id_empresa), ''), v.id_empresa) = $1
         and ($2 = '' or c.nome ilike $3 or coalesce(v.cargo, '') ilike $3)
       order by cv.data_contratacao desc nulls last
       limit 200
@@ -163,24 +190,42 @@ export class PortalDadosService {
 
   async salvarColaborador(usuarioId: string, empresaId: string, body: Record<string, string>) {
     await this.garantir(usuarioId, empresaId);
-    const cpf = body.cpf.replace(/\D/g, "");
-    const existente = cpf
-      ? await this.db.query<{ id_candidato: string }>(`select id_candidato from dna_work.candidato where regexp_replace(coalesce(cpf, ''), '\\D', '', 'g') = $1 limit 1`, [cpf])
-      : { rows: [] };
+    const nome = body.nome?.trim() ?? "";
+    const cpf = (body.cpf ?? "").replace(/\D/g, "").slice(0, 11);
+    const cargo = (body.cargo ?? "").trim().slice(0, 255);
+    if (nome.length < 2) throw new AppError(422, "NOME_CURTO", "Informe o nome do colaborador.");
+    if (cpf.length !== 11) throw new AppError(422, "CPF_INVALIDO", "Informe o CPF com 11 números.");
+    if (cargo.length < 2) throw new AppError(422, "CARGO_CURTO", "Informe o cargo.");
+    const existente = await this.db.query<{ id_candidato: string }>(`
+      select id_candidato from dna_work.candidato
+      where regexp_replace(coalesce(cpf, ''), '\\D', '', 'g') = $1
+      limit 1
+    `, [cpf]);
     const idCandidato = existente.rows[0]?.id_candidato ?? crypto.randomUUID();
-    if (!existente.rows[0]) {
-      await this.db.query(`
-        insert into dna_work.candidato (id_candidato, nome, cpf, email, celular, datacadastro, id_empresa, colaborador)
-        values ($1,$2,$3,$4,$5,$6,$7,1)
-      `, [idCandidato, body.nome, cpf, body.email || null, body.celular || null, dataLegado(new Date().toISOString().slice(0, 10)), empresaId]);
+    const inicio = body.inicio ? dataLegado(body.inicio) : dataLegado(new Date().toISOString().slice(0, 10));
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+      if (!existente.rows[0]) {
+        await client.query(`
+          insert into dna_work.candidato (id_candidato, nome, cpf, email, celular, datacadastro, id_empresa, colaborador)
+          values ($1,$2,$3,$4,$5,$6,$7,1)
+        `, [idCandidato, nome, cpf, body.email?.trim() || null, (body.celular ?? "").trim().slice(0, 40) || null, inicio, empresaId]);
+      }
+      const idColaborador = crypto.randomUUID();
+      await client.query(`
+        insert into dna_work.colaborador
+          (id_colaborador, id_candidato, id_empresa, data_inicio, departamento, cargo, data_cadastro, status_ponto, status_colaborador)
+        values ($1,$2,$3,$4,$5,$6,$7,1,1)
+      `, [idColaborador, idCandidato, empresaId, inicio, body.departamento?.trim().slice(0, 255) || null, cargo, dataLegado(new Date().toISOString().slice(0, 10))]);
+      await client.query("COMMIT");
+      return { id: idColaborador };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
     }
-    const idColaborador = crypto.randomUUID();
-    await this.db.query(`
-      insert into dna_work.colaborador
-        (id_colaborador, id_candidato, id_empresa, data_inicio, departamento, cargo, data_cadastro, status_ponto, status_colaborador, carga_base)
-      values ($1,$2,$3,$4,$5,$6,$7,1,1,$8)
-    `, [idColaborador, idCandidato, empresaId, dataLegado(body.inicio), body.departamento || null, body.cargo, dataLegado(new Date().toISOString().slice(0, 10)), body.carga ? Number(body.carga) : null]);
-    return { id: idColaborador };
   }
 
   async salvarVaga(usuarioId: string, empresaId: string, body: Record<string, string>) {

@@ -42,7 +42,7 @@ interface WebGLFallbackProps {
 
 export function WebGLFallback({
   className,
-  message = "Interactive WebGL content is unavailable on this device/browser.",
+  message = "",
 }: WebGLFallbackProps) {
   return (
     <div
@@ -53,7 +53,7 @@ export function WebGLFallback({
       role="status"
       aria-live="polite"
     >
-      <p>{message}</p>
+      {message ? <p>{message}</p> : null}
     </div>
   );
 }

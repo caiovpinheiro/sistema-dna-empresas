@@ -89,8 +89,7 @@ function Portal({ sessao }: { sessao: Sessao }) {
   const expandido = aberto || hover;
 
   return (
-    <div className="relative flex min-h-screen">
-      <AnimatedGradient className="pointer-events-none fixed inset-0 -z-10" config={{ preset: "Aurora" }} />
+    <div className="flex min-h-screen">
       {aberto ? <button aria-label="Fechar menu" className="fixed inset-0 z-40 bg-[#24182d]/40 md:hidden" onClick={() => setAberto(false)} /> : null}
       <aside
         onMouseEnter={() => setHover(true)}
@@ -120,14 +119,14 @@ function Portal({ sessao }: { sessao: Sessao }) {
           <Sair compacto={!expandido} />
         </div>
       </aside>
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 bg-[#f4f2f5]">
         <header className="sticky top-0 z-30 flex h-14 items-center gap-3 px-5 md:px-8">
           <button className="grid h-9 w-9 place-items-center rounded-lg hover:bg-white md:hidden" aria-label="Abrir menu" onClick={() => setAberto(true)}><Menu size={18} /></button>
           <p className="min-w-0 flex-1 truncate text-sm text-[#6f6578]">{empresa}</p>
           <p className="hidden truncate text-sm text-[#1c1524] sm:block">{sessao.nome}</p>
         </header>
         <main className="mx-auto max-w-5xl px-5 pb-10 md:px-8">
-          {pathname === "/colaboradores" ? <Consulta titulo="Colaboradores" caminho="/api/v1/empresa/colaboradores" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "datainicio", titulo: "Início" }, { chave: "email", titulo: "E-mail" }, { chave: "celular", titulo: "Celular" }]} /> : null}
+          {pathname === "/colaboradores" ? <Consulta titulo="Colaboradores" caminho="/api/v1/empresa/colaboradores" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "datainicio", titulo: "Início" }, { chave: "email", titulo: "E-mail" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
           {pathname === "/colaboradores/novo" ? <ColaboradorNovo /> : null}
           {pathname === "/escalas" ? <Listagem titulo="Escalas" caminho="/api/v1/empresa/escalas" novo="/escalas/nova" colunas={[{ chave: "nome", titulo: "Nome" }]} /> : null}
           {pathname === "/escalas/nova" ? <EscalaNova /> : null}
@@ -250,7 +249,9 @@ function LoginPage() {
     );
   }
   return (
-    <TelaCentral>
+    <div className="relative min-h-screen">
+      <AnimatedGradient className="pointer-events-none fixed inset-0 -z-10" config={{ preset: "Aurora" }} />
+      <div className="login-fundo-conteudo">
       <form className="relative mt-12 w-full max-w-md rounded-[2rem] bg-white px-8 pb-8 pt-16 shadow-[0_24px_50px_rgb(49_10_80_/_18%)]" onSubmit={(event) => { event.preventDefault(); setErro(""); login.mutate(); }}>
         <span className="absolute left-1/2 top-0 z-10 flex h-24 w-32 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-2xl bg-white px-3 shadow-[0_14px_28px_rgb(49_10_80_/_18%)]">
           <img src="/logo-mono.png" alt="DNA Work" className="h-12 w-full object-contain" />
@@ -269,7 +270,8 @@ function LoginPage() {
         </button>
         <Link to="/ponto/login" className="mt-4 block text-center text-sm font-semibold text-[#5b21b6]">Sou colaborador e quero bater ponto</Link>
       </form>
-    </TelaCentral>
+      </div>
+    </div>
   );
 }
 
