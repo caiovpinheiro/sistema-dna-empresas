@@ -1,4 +1,5 @@
-import { Link } from "react-router-dom";
+import { Briefcase, Clock, FileText, Users, Wallet } from "lucide-react";
+import { Link as RouterLink } from "react-router-dom";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
@@ -19,28 +20,44 @@ export function Inicio({ acessos = [] }: { acessos?: Acesso[] }) {
     ["Contratos", dados.contratos],
   ];
   return (
-    <section className="grid gap-4">
+    <section className="grid gap-8">
       <div>
-        <h2 className="text-xl font-semibold tracking-tight text-[#24182d]">{dados.empresa || "Início"}</h2>
-        <p className="text-sm text-[#7a6b86]">{dados.cnpj}</p>
+        <h2 className="max-w-[16ch] text-4xl font-medium tracking-tight text-[#1c1524]">{dados.empresa || "Início"}</h2>
+        <p className="mt-2 text-sm text-[#6f6578]">{dados.cnpj}</p>
       </div>
-      <div className="grid gap-px overflow-hidden rounded-xl bg-[#eadff0] sm:grid-cols-3">
-        {cards.map(([titulo, valor]) => (
-          <article key={String(titulo)} className="bg-white px-5 py-4">
-            <p className="text-[13px] text-[#7a6b86]">{titulo}</p>
-            <p className="mt-2 text-[2rem] font-medium leading-none tabular-nums tracking-tight text-[#6a4b84]">{valor}</p>
-          </article>
-        ))}
-      </div>
-      {acessos.length ? (
-        <div className="flex flex-wrap gap-2">
-          {acessos.map((acesso) => (
-            <Link key={acesso.href} to={acesso.href} className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-[#6a4b84] ring-1 ring-[#eadff0] hover:bg-[#f3e8f5]">{acesso.label}</Link>
+      <div className="overflow-hidden rounded-2xl bg-white shadow-[0_1px_2px_rgb(28_21_36_/_5%),0_16px_40px_rgb(106_75_132_/_7%)]">
+        <div className="grid sm:grid-cols-3">
+          {cards.map(([titulo, valor], index) => (
+            <article key={String(titulo)} className={`px-6 py-5 ${index > 0 ? "border-t border-[#f0ebf3] sm:border-t-0 sm:border-l" : ""}`}>
+              <p className="text-4xl font-medium tabular-nums tracking-tight text-[#1c1524]">{valor}</p>
+              <p className="mt-2 text-sm text-[#6f6578]">{titulo}</p>
+            </article>
           ))}
         </div>
-      ) : null}
+        {acessos.length ? (
+          <div className="border-t border-[#f0ebf3]">
+            {acessos.map((acesso) => (
+              <RouterLink key={acesso.href} to={acesso.href} className="flex items-center gap-3 border-t border-[#f0ebf3] px-5 py-3.5 text-sm font-medium text-[#1c1524] transition duration-150 first:border-t-0 hover:bg-[#faf8fb]">
+                <AcessoIcon nome={acesso.label} />
+                {acesso.label}
+              </RouterLink>
+            ))}
+          </div>
+        ) : null}
+      </div>
     </section>
   );
+}
+
+function AcessoIcon({ nome }: { nome: string }) {
+  const comum = "shrink-0 text-[#6a4b84]";
+  const caixa = "grid h-8 w-8 place-items-center rounded-lg bg-[#f6f1f8]";
+  const icone = nome === "Colaboradores" ? <Users size={16} className={comum} />
+    : nome === "Vagas" ? <Briefcase size={16} className={comum} />
+    : nome === "Ponto" ? <Clock size={16} className={comum} />
+    : nome === "Faturas" ? <Wallet size={16} className={comum} />
+    : <FileText size={16} className={comum} />;
+  return <span className={caixa}>{icone}</span>;
 }
 
 export function Consulta({ titulo, caminho, colunas }: { titulo: string; caminho: string; colunas: Array<{ chave: string; titulo: string }> }) {

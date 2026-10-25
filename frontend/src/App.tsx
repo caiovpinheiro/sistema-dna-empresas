@@ -93,13 +93,12 @@ function Portal({ sessao }: { sessao: Sessao }) {
       <aside
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
-        className={`${aberto ? "fixed inset-y-0 z-50 flex w-80" : "hidden"} flex-col overflow-x-hidden border-r border-[#eadff0] bg-[#fbf9fc] text-[#24182d] transition-[width] duration-300 ease-out md:static md:flex md:min-h-screen ${hover ? "md:w-80" : "md:w-[72px]"}`}
+        className={`${aberto ? "fixed inset-y-0 z-50 flex w-80" : "hidden"} flex-col overflow-x-hidden border-r border-[#efeaf2] bg-white text-[#1c1524] shadow-[inset_3px_0_0_#6a4b84] transition-[width] duration-300 ease-out md:static md:flex md:min-h-screen ${hover ? "md:w-80" : "md:w-[72px]"}`}
       >
-        <div className={`flex items-center py-4 ${expandido ? "gap-3 px-4" : "justify-center px-2"}`}>
-          <img src="/logo-mono.png" alt="DNA Work" className={`shrink-0 object-contain ${expandido ? "h-9 w-16" : "h-8 w-12"}`} />
+        <div className={`flex items-center py-5 ${expandido ? "gap-3 px-5" : "justify-center px-2"}`}>
+          <img src="/logo-mono.png" alt="DNA Work" className={`shrink-0 object-contain ${expandido ? "h-10 w-16" : "h-8 w-12"}`} />
           <div className={`overflow-hidden whitespace-nowrap transition-all duration-300 ${expandido ? "w-auto opacity-100" : "w-0 opacity-0"}`}>
-            <p className="text-xs font-semibold text-[#6a4b84]">DNAWORK</p>
-            <h1 className="text-base font-extrabold leading-5">Empresas</h1>
+            <p className="text-[15px] font-semibold leading-5 text-[#1c1524]">Empresas</p>
           </div>
           <button className={`rounded-xl p-2 hover:bg-black/5 md:hidden ${expandido ? "ml-auto" : "hidden"}`} aria-label="Fechar" onClick={() => setAberto(false)}><X size={18} /></button>
         </div>
@@ -119,12 +118,13 @@ function Portal({ sessao }: { sessao: Sessao }) {
           <Sair compacto={!expandido} />
         </div>
       </aside>
-      <div className="min-w-0 flex-1 bg-[#f6f3f8]">
-        <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-[#eadff0] bg-[#fbf9fc]/90 px-4 backdrop-blur">
-          <button className="grid h-10 w-10 place-items-center rounded-xl transition hover:bg-slate-100 active:scale-95 md:hidden" aria-label="Abrir menu" onClick={() => setAberto(true)}><Menu size={18} /></button>
-          <p className="min-w-0 flex-1 truncate text-sm font-semibold text-[#24182d]">{empresa}</p>
+      <div className="min-w-0 flex-1 bg-[#f4f2f5]">
+        <header className="sticky top-0 z-30 flex h-14 items-center gap-3 px-5 md:px-8">
+          <button className="grid h-9 w-9 place-items-center rounded-lg hover:bg-white md:hidden" aria-label="Abrir menu" onClick={() => setAberto(true)}><Menu size={18} /></button>
+          <p className="min-w-0 flex-1 truncate text-sm text-[#6f6578]">{empresa}</p>
+          <p className="hidden truncate text-sm text-[#1c1524] sm:block">{sessao.nome}</p>
         </header>
-        <main className="mx-auto max-w-6xl px-5 py-6 md:px-8">
+        <main className="mx-auto max-w-5xl px-5 pb-10 md:px-8">
           {pathname === "/colaboradores" ? <Consulta titulo="Colaboradores" caminho="/api/v1/empresa/colaboradores" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "datainicio", titulo: "Início" }, { chave: "email", titulo: "E-mail" }, { chave: "celular", titulo: "Celular" }]} /> : null}
           {pathname === "/colaboradores/novo" ? <ColaboradorNovo /> : null}
           {pathname === "/escalas" ? <Listagem titulo="Escalas" caminho="/api/v1/empresa/escalas" novo="/escalas/nova" colunas={[{ chave: "nome", titulo: "Nome" }]} /> : null}
@@ -172,7 +172,7 @@ function Ramo({ item, ativo, expandido, onNavigate, nivel = 0 }: { item: ItemMen
     const marcado = href.startsWith("/opcao") ? ativo === item.link : href.includes("?") ? pathname + search === href : pathname === href;
     return (
       <li>
-        <Link to={href} onClick={onNavigate} title={item.label} className={`flex h-10 items-center gap-3 rounded-lg px-2.5 text-[13px] font-semibold transition duration-150 ${marcado ? "bg-[#f3e8f5] text-[#6a4b84] shadow-[inset_2px_0_0_#6a4b84]" : "text-[#3d2c48] hover:bg-white"}`}>
+        <Link to={href} onClick={onNavigate} title={item.label} className={`flex h-9 items-center gap-3 rounded-md px-2.5 text-[13px] font-medium transition duration-150 ${marcado ? "bg-[#f4eef6] text-[#6a4b84]" : "text-[#3c3344] hover:bg-[#f7f5f8]"}`}>
           {nivel === 0 ? <Icon size={18} className="shrink-0" /> : <span className="ml-1 h-1.5 w-1.5 shrink-0 rounded-full bg-current" />}
           {texto}
         </Link>
@@ -181,7 +181,7 @@ function Ramo({ item, ativo, expandido, onNavigate, nivel = 0 }: { item: ItemMen
   }
   return (
     <li className="grid gap-1">
-      <button type="button" aria-expanded={open && expandido} title={item.label} onClick={() => setOpen((value) => !value)} className="flex h-10 w-full items-center gap-3 rounded-lg px-2.5 text-[13px] font-semibold text-[#3d2c48] transition duration-150 hover:bg-white">
+      <button type="button" aria-expanded={open && expandido} title={item.label} onClick={() => setOpen((value) => !value)} className="flex h-9 w-full items-center gap-3 rounded-md px-2.5 text-[13px] font-medium text-[#3c3344] transition duration-150 hover:bg-[#f7f5f8]">
         <Icon size={18} className="shrink-0" />
         {texto}
         <ChevronDown size={16} className={`ml-auto shrink-0 transition duration-200 ${expandido ? "" : "w-0 overflow-hidden opacity-0"} ${open ? "" : "-rotate-90"}`} />
