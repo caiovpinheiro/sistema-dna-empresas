@@ -44,43 +44,52 @@ button, a {
 .aurora-blob {
   position: absolute;
   border-radius: 999px;
-  filter: blur(48px);
+  filter: blur(36px);
   will-change: transform;
-  animation: aurora-drift 16s ease-in-out infinite alternate;
 }
 
 .aurora-blob-a {
-  width: 72vmax;
-  height: 72vmax;
-  top: -24%;
-  left: -16%;
-  background: #1a0b2e;
+  width: 55vmax;
+  height: 55vmax;
+  top: -10%;
+  left: -20%;
+  background: #2a0a4a;
+  animation: aurora-a 9s ease-in-out infinite alternate;
 }
 
 .aurora-blob-b {
-  width: 64vmax;
-  height: 64vmax;
-  right: -18%;
-  bottom: -28%;
+  width: 48vmax;
+  height: 48vmax;
+  right: -24%;
+  bottom: -18%;
   background: #f20089;
-  opacity: 0.72;
-  animation-duration: 22s;
+  opacity: 0.9;
+  animation: aurora-b 7s ease-in-out infinite alternate;
 }
 
 .aurora-blob-c {
-  width: 42vmax;
-  height: 42vmax;
-  top: 18%;
-  left: 34%;
+  width: 32vmax;
+  height: 32vmax;
+  top: 8%;
+  left: 20%;
   background: #7b2cbf;
-  opacity: 0.6;
-  animation-duration: 13s;
-  animation-direction: alternate-reverse;
+  opacity: 0.75;
+  animation: aurora-c 11s ease-in-out infinite alternate;
 }
 
-@keyframes aurora-drift {
+@keyframes aurora-a {
   from { transform: translate3d(0, 0, 0) scale(1); }
-  to { transform: translate3d(10%, -8%, 0) scale(1.18); }
+  to { transform: translate3d(28vw, 18vh, 0) scale(1.25); }
+}
+
+@keyframes aurora-b {
+  from { transform: translate3d(0, 0, 0) scale(1.05); }
+  to { transform: translate3d(-34vw, -22vh, 0) scale(0.85); }
+}
+
+@keyframes aurora-c {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(18vw, 28vh, 0) scale(1.35); }
 }
 
 @media (prefers-reduced-motion: reduce) {
