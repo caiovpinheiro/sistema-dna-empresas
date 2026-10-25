@@ -231,7 +231,7 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
       latitude: z.number().finite().optional(),
       longitude: z.number().finite().optional(),
     }), request.body);
-    const dispositivo = String(request.headers["user-agent"] ?? "").slice(0, 180);
+    const dispositivo = String(request.headers["user-agent"] ?? "").slice(0, 100);
     return {
       success: true,
       data: await ponto.bater(request.pontoColaborador!.sub, body.pin, body.confirmar === true, body.latitude ?? null, body.longitude ?? null, dispositivo),

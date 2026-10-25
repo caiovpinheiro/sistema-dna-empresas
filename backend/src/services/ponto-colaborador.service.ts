@@ -105,7 +105,7 @@ export class PontoColaboradorService {
       await client.query("select pg_advisory_xact_lock(hashtext($1))", [`ponto-${pessoa.id_empresa}`]);
       const nsr = await this.proximoNsr(client, pessoa.id_empresa, agora.iso);
       await this.gravarAfd(client, pessoa, nsr, agora, decisao.data);
-      const coords = { latitude, longitude, dispositivo: dispositivo.slice(0, 180) };
+      const coords = { latitude, longitude, dispositivo: dispositivo.slice(0, 100) };
       if (decisao.tipo === "entrada") {
         const id = await this.proximoPonto(client);
         await client.query(`
@@ -113,7 +113,7 @@ export class PontoColaboradorService {
             (id, id_colaborador, data, entrada, entrada_editado, data_entrada, nsf_entrada,
              latitude_entrada, longitude_entrada, dispositivo_entrada, id_carga)
           values ($1,$2,$3,$4,$4,$5,$6,$7,$8,$9,$10)
-        `, [id, idColaborador, decisao.data, agora.hora, agora.legado, nsr, texto(coords.latitude), texto(coords.longitude), coords.dispositivo, carga]);
+        `, [id, idColaborador, decisao.data, agora.hora, agora.legado, nsr, texto(coords.latitude), texto(coords.longitude), coords.dispositivo, carga && carga.length <= 10 ? carga : null]);
         await client.query("commit");
         return { id, tipo: "entrada" as const, data: dataBr(decisao.data), hora: agora.hora, nsr };
       }
