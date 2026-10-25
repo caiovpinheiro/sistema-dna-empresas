@@ -142,7 +142,7 @@ button, a {
   display: grid;
   min-height: 100vh;
   place-items: center;
-  padding: 1rem;
+  padding: max(5.5rem, env(safe-area-inset-top)) 1rem max(1.25rem, env(safe-area-inset-bottom));
 }
 
 @keyframes login-drift {

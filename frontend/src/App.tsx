@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Briefcase, Building2, Check, ChevronDown, Circle, Clock, Gauge, GraduationCap, LayoutDashboard, Lock, LogOut, Menu, Settings, User, Users, Wallet, X, type LucideIcon } from "lucide-react";
+import { Briefcase, Building2, ChevronDown, Circle, Clock, Gauge, GraduationCap, LayoutDashboard, Lock, LogOut, Menu, Settings, User, Users, Wallet, X, type LucideIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Consulta, Faturas, Inicio } from "./pages/consultas";
@@ -88,7 +88,7 @@ function Portal({ sessao }: { sessao: Sessao }) {
   const expandido = aberto || hover;
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex min-h-dvh">
       {aberto ? <button aria-label="Fechar menu" className="fixed inset-0 z-40 bg-[#24182d]/40 md:hidden" onClick={() => setAberto(false)} /> : null}
       <aside
         onMouseEnter={() => setHover(true)}
@@ -119,12 +119,12 @@ function Portal({ sessao }: { sessao: Sessao }) {
         </div>
       </aside>
       <div className="min-w-0 flex-1 bg-[#f4f2f5]">
-        <header className="sticky top-0 z-30 flex h-14 items-center gap-3 px-5 md:px-8">
+        <header className="sticky top-0 z-30 flex min-h-14 items-center gap-3 px-4 pt-[env(safe-area-inset-top)] md:px-8">
           <button className="grid h-9 w-9 place-items-center rounded-lg hover:bg-white md:hidden" aria-label="Abrir menu" onClick={() => setAberto(true)}><Menu size={18} /></button>
           <p className="min-w-0 flex-1 truncate text-sm text-[#6f6578]">{empresa}</p>
           <p className="hidden truncate text-sm text-[#1c1524] sm:block">{sessao.nome}</p>
         </header>
-        <main className="mx-auto max-w-5xl px-5 pb-10 md:px-8">
+        <main className="mx-auto w-full max-w-5xl overflow-x-hidden px-4 pb-[max(2.5rem,env(safe-area-inset-bottom))] md:px-8">
           {pathname === "/colaboradores" ? <Consulta titulo="Colaboradores" caminho="/api/v1/empresa/colaboradores" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "datainicio", titulo: "Início" }, { chave: "email", titulo: "E-mail" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
           {pathname === "/colaboradores/novo" ? <ColaboradorNovo /> : null}
           {pathname === "/escalas" ? <Listagem titulo="Escalas" caminho="/api/v1/empresa/escalas" novo="/escalas/nova" colunas={[{ chave: "nome", titulo: "Nome" }]} /> : null}
@@ -229,33 +229,31 @@ function LoginPage() {
   });
   useEffect(() => {
     if (!entrou) return;
-    const reduzido = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const timer = window.setTimeout(() => navigate("/"), reduzido ? 350 : 1100);
+    const timer = window.setTimeout(() => navigate("/"), 8000);
     return () => window.clearTimeout(timer);
   }, [entrou, navigate]);
   if (entrou) {
     return (
-      <FundoRoxo className="login-veil" papel="status">
-        <div className="login-ok">
-          <span className="login-badge">
-            <span className="login-ring" />
-            <Check size={36} strokeWidth={2.6} />
-          </span>
-          <p className="login-title">Login realizado</p>
-          <p className="login-sub">{entrou}</p>
+      <FundoAcesso>
+        <div className="grid w-full max-w-xs justify-items-center rounded-[2rem] bg-white px-6 py-8 text-center shadow-2xl" role="status">
+          <video
+            className="h-40 w-40 rounded-2xl object-contain sm:h-44 sm:w-44"
+            src="/login-sucesso.webm"
+            autoPlay
+            muted
+            playsInline
+            aria-label={`Login realizado, ${entrou}`}
+            onEnded={() => navigate("/")}
+          />
+          <p className="mt-4 text-lg font-extrabold text-[#1c1524]">Login realizado</p>
+          <p className="text-sm text-[#6f6578]">{entrou}</p>
         </div>
-      </FundoRoxo>
+      </FundoAcesso>
     );
   }
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#0a001a]">
-      <div className="pointer-events-none fixed inset-0" aria-hidden="true">
-        <span className="aurora-blob aurora-blob-a" />
-        <span className="aurora-blob aurora-blob-b" />
-        <span className="aurora-blob aurora-blob-c" />
-      </div>
-      <div className="login-fundo-conteudo">
-      <form className="relative mt-12 w-full max-w-md rounded-[2rem] bg-white px-8 pb-8 pt-16 shadow-[0_24px_50px_rgb(49_10_80_/_18%)]" onSubmit={(event) => { event.preventDefault(); setErro(""); login.mutate(); }}>
+    <FundoAcesso>
+      <form className="relative w-full max-w-md rounded-[2rem] bg-white px-5 pb-8 pt-16 shadow-[0_24px_50px_rgb(49_10_80_/_18%)] sm:px-8" onSubmit={(event) => { event.preventDefault(); setErro(""); login.mutate(); }}>
         <span className="absolute left-1/2 top-0 z-10 flex h-24 w-32 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-2xl bg-white px-3 shadow-[0_14px_28px_rgb(49_10_80_/_18%)]">
           <img src="/logo-mono.png" alt="DNA Work" className="h-12 w-full object-contain" />
         </span>
@@ -273,8 +271,7 @@ function LoginPage() {
         </button>
         <Link to="/ponto/login" className="mt-4 block text-center text-sm font-semibold text-[#5b21b6]">Sou colaborador e quero bater ponto</Link>
       </form>
-      </div>
-    </div>
+    </FundoAcesso>
   );
 }
 
@@ -336,6 +333,19 @@ function Painel({ titulo, texto, detalhe }: { titulo: string; texto: string; det
       <p className="mt-3 text-sm leading-6 text-slate-600">{texto}</p>
       {detalhe ? <p className="acao acao-purple mt-4 inline-flex">{detalhe}</p> : null}
     </Card>
+  );
+}
+
+function FundoAcesso({ children }: { children: ReactNode }) {
+  return (
+    <div className="relative min-h-dvh overflow-hidden bg-[#0a001a]">
+      <div className="pointer-events-none fixed inset-0" aria-hidden="true">
+        <span className="aurora-blob aurora-blob-a" />
+        <span className="aurora-blob aurora-blob-b" />
+        <span className="aurora-blob aurora-blob-c" />
+      </div>
+      <div className="login-fundo-conteudo">{children}</div>
+    </div>
   );
 }
 

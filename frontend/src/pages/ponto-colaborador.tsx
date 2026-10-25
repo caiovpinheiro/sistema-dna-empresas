@@ -28,7 +28,7 @@ export function PontoLoginPage() {
       <span className="login-orb login-orb-b" aria-hidden="true" />
       <span className="login-orb login-orb-c" aria-hidden="true" />
       <div className="login-fundo-conteudo">
-        <form className="relative mt-12 w-full max-w-md rounded-[2rem] bg-white px-8 pb-8 pt-16 shadow-[0_24px_50px_rgb(49_10_80_/_18%)]" onSubmit={(event) => { event.preventDefault(); setErro(""); login.mutate(); }}>
+        <form className="relative w-full max-w-md rounded-[2rem] bg-white px-5 pb-8 pt-16 shadow-[0_24px_50px_rgb(49_10_80_/_18%)] sm:px-8" onSubmit={(event) => { event.preventDefault(); setErro(""); login.mutate(); }}>
           <span className="absolute left-1/2 top-0 z-10 flex h-24 w-32 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-2xl bg-white px-3 shadow-[0_14px_28px_rgb(49_10_80_/_18%)]">
             <img src="/logo-mono.png" alt="DNA Work" className="h-12 w-full object-contain" />
           </span>
@@ -102,13 +102,13 @@ export function PontoPage() {
     );
   }, []);
 
-  if (painel.isLoading) return <div className="grid min-h-screen place-items-center bg-[#f6f3f8] text-sm text-slate-500">Carregando relógio…</div>;
+  if (painel.isLoading) return <div className="grid min-h-dvh place-items-center bg-[#f6f3f8] px-4 text-sm text-slate-500">Carregando relógio…</div>;
   if (painel.isError || !painel.data) return <PontoLoginPage />;
   const dados = painel.data.data;
   const titulo = dados.acao === "saida" ? "Saída" : "Entrada";
 
   return (
-    <div className="min-h-screen bg-[#f6f3f8] px-4 py-8">
+    <div className="min-h-dvh bg-[#f6f3f8] px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[max(2rem,env(safe-area-inset-top))]">
       <div className="mx-auto grid w-full max-w-lg gap-4">
         <div className="flex items-center justify-between gap-3">
           <div>
