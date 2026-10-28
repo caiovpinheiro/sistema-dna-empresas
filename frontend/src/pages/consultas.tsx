@@ -8,17 +8,18 @@ type Linha = Record<string, string | null>;
 type Acesso = { href: string; label: string };
 
 export function Inicio({ acessos = [] }: { acessos?: Acesso[] }) {
-  const painel = useQuery({ queryKey: ["painel-empresa"], queryFn: () => api<{ empresa: string; cnpj: string; colaboradoresAtivos: number; vagasAbertas: number; contratos: number }>("/api/v1/empresa/painel") });
+  const painel = useQuery({ queryKey: ["painel-empresa"], queryFn: () => api<{ empresa: string; cnpj: string; colaboradoresAtivos: number; vagasAbertas: number; contratos: number; batidasMes: number; pontoAtivo: boolean }>("/api/v1/empresa/painel") });
   if (painel.isLoading) {
     return <div className="grid gap-px overflow-hidden rounded-xl bg-[#eadff0] sm:grid-cols-3">{Array.from({ length: 3 }).map((_, index) => <div key={index} className="h-20 animate-pulse bg-white" />)}</div>;
   }
   if (painel.isError || !painel.data) return <p className="text-sm text-rose-700">Não foi possível carregar o início desta empresa.</p>;
   const dados = painel.data.data;
-  const cards = [
+  const cards: Array<[string, number]> = [
     ["Colaboradores ativos", dados.colaboradoresAtivos],
     ["Vagas abertas", dados.vagasAbertas],
     ["Contratos", dados.contratos],
   ];
+  if (dados.pontoAtivo) cards.push(["Batidas no mês", dados.batidasMes]);
   return (
     <section className="grid gap-8">
       <div>
@@ -26,7 +27,7 @@ export function Inicio({ acessos = [] }: { acessos?: Acesso[] }) {
         <p className="mt-2 text-sm text-[#6f6578]">{dados.cnpj}</p>
       </div>
       <div className="overflow-hidden rounded-2xl bg-white shadow-[0_1px_2px_rgb(28_21_36_/_5%),0_16px_40px_rgb(106_75_132_/_7%)]">
-        <div className="grid sm:grid-cols-3">
+        <div className={`grid ${cards.length > 3 ? "sm:grid-cols-2 lg:grid-cols-4" : "sm:grid-cols-3"}`}>
           {cards.map(([titulo, valor], index) => (
             <article key={String(titulo)} className={`px-6 py-5 ${index > 0 ? "border-t border-[#f0ebf3] sm:border-t-0 sm:border-l" : ""}`}>
               <p className="text-4xl font-medium tabular-nums tracking-tight text-[#1c1524]">{valor}</p>

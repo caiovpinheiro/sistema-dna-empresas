@@ -188,6 +188,7 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   app.post("/api/v1/empresa/escalas", async (request) => ({ success: true, data: await dados.salvarEscala(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
   app.get("/api/v1/empresa/cargas", async (request) => ({ success: true, data: await dados.cargas(request.user.sub, request.user.empresaId!) }));
   app.post("/api/v1/empresa/cargas", async (request) => ({ success: true, data: await dados.salvarCarga(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
+  app.get("/api/v1/empresa/ponto/relatorio", async (request) => ({ success: true, data: await dados.relatorioPonto(request.user.sub, request.user.empresaId!) }));
   app.get("/api/v1/empresa/feriados", async (request) => ({ success: true, data: await dados.feriados(request.user.sub, request.user.empresaId!) }));
   app.post("/api/v1/empresa/feriados", async (request) => ({ success: true, data: await dados.salvarFeriado(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
   app.post("/api/v1/empresa/colaboradores", async (request) => ({ success: true, data: await dados.salvarColaborador(request.user.sub, request.user.empresaId!, corpo(request.body)) }));

@@ -126,31 +126,31 @@ function Portal({ sessao }: { sessao: Sessao }) {
           <p className="hidden truncate text-sm text-[#1c1524] sm:block">{sessao.nome}</p>
         </header>
         <main className="mx-auto w-full max-w-5xl overflow-x-hidden px-4 pb-[max(2.5rem,env(safe-area-inset-bottom))] md:px-8">
-          {pathname === "/colaboradores" ? <Consulta titulo="Colaboradores" caminho="/api/v1/empresa/colaboradores" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "datainicio", titulo: "Início" }, { chave: "email", titulo: "E-mail" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/colaboradores" ? <Consulta titulo="Colaboradores" caminho="/api/v1/empresa/colaboradores" colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "datainicio", titulo: "Contratação" }, { chave: "departamento", titulo: "Departamento" }, { chave: "cargo", titulo: "Cargo" }, { chave: "modalidade", titulo: "Modalidade" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
           {pathname === "/colaboradores/novo" ? <ColaboradorNovo /> : null}
-          {pathname === "/escalas" ? <Listagem titulo="Escalas" caminho="/api/v1/empresa/escalas" novo="/escalas/nova" colunas={[{ chave: "nome", titulo: "Nome" }]} /> : null}
+          {pathname === "/escalas" ? <Listagem titulo="Escalas" caminho="/api/v1/empresa/escalas" novo="/escalas/nova" colunas={[{ chave: "nome", titulo: "Escala" }, { chave: "segunda", titulo: "Segunda" }, { chave: "terca", titulo: "Terça" }, { chave: "quarta", titulo: "Quarta" }, { chave: "quinta", titulo: "Quinta" }, { chave: "sexta", titulo: "Sexta" }, { chave: "sabado", titulo: "Sábado" }, { chave: "domingo", titulo: "Domingo" }]} /> : null}
           {pathname === "/escalas/nova" ? <EscalaNova /> : null}
-          {pathname === "/cargas" ? <Listagem titulo="Cargas horárias" caminho="/api/v1/empresa/cargas" novo="/cargas/nova" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "tipo", titulo: "Tipo" }, { chave: "entrada", titulo: "Entrada" }, { chave: "saida", titulo: "Saída" }]} /> : null}
+          {pathname === "/cargas" ? <Listagem titulo="Cargas horárias" caminho="/api/v1/empresa/cargas" novo="/cargas/nova" colunas={[{ chave: "nome", titulo: "Carga horária" }, { chave: "tipo", titulo: "Tipo" }, { chave: "entrada", titulo: "Entrada" }, { chave: "saida_refeicao", titulo: "Saída refeição" }, { chave: "retorno_refeicao", titulo: "Retorno refeição" }, { chave: "saida", titulo: "Saída" }]} /> : null}
           {pathname === "/cargas/nova" ? <CargaNova /> : null}
           {pathname === "/feriados" ? <Listagem titulo="Feriados" caminho="/api/v1/empresa/feriados" novo="/feriados/novo" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "data", titulo: "Data" }]} /> : null}
           {pathname === "/feriados/novo" ? <FeriadoNovo /> : null}
           {pathname === "/ponto/relatorio" ? <RelatorioPonto /> : null}
           {pathname === "/vagas/nova" ? <VagaNova tipo={new URLSearchParams(search).get("tipo") ?? "2"} /> : null}
-          {pathname === "/talentos" ? <Listagem titulo="Banco de talentos" caminho="/api/v1/empresa/talentos" novo="/talentos/novo" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cpf", titulo: "CPF" }, { chave: "email", titulo: "E-mail" }, { chave: "cidade", titulo: "Cidade" }]} /> : null}
+          {pathname === "/talentos" ? <Listagem titulo="Banco de talentos" caminho="/api/v1/empresa/talentos" novo="/talentos/novo" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cidade", titulo: "Cidade" }, { chave: "bairro", titulo: "Bairro" }, { chave: "estado", titulo: "Estado" }, { chave: "ensino", titulo: "Ensino" }, { chave: "curso", titulo: "Curso" }, { chave: "datacadastro", titulo: "Cadastro" }]} /> : null}
           {pathname === "/talentos/novo" ? <Formulario titulo="Cadastrar talento" destino="/api/v1/empresa/talentos" voltar="/talentos" campos={[["nome", "Nome", "text"], ["cpf", "CPF", "text"], ["email", "E-mail", "email"], ["celular", "Celular", "text"], ["cidade", "Cidade", "text"]]} /> : null}
-          {pathname === "/relatorios/encaminhamentos" ? <Listagem titulo="Candidatos encaminhados" caminho="/api/v1/empresa/encaminhamentos" novo="/vagas" colunas={[{ chave: "nome", titulo: "Candidato" }, { chave: "cargo", titulo: "Vaga" }, { chave: "data", titulo: "Data" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
-          {pathname === "/relatorios/documentos" ? <Listagem titulo="Documentos" caminho="/api/v1/empresa/documentos" novo="/colaboradores" colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "documentos", titulo: "Arquivos" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
-          {pathname === "/relatorios/seguro" ? <Listagem titulo="Seguro de vida" caminho="/api/v1/empresa/seguro" novo="/colaboradores" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "inicio", titulo: "Início" }]} /> : null}
-          {pathname === "/relatorios/calendario" ? <Listagem titulo="Calendário" caminho="/api/v1/empresa/calendario" novo="/vagas" colunas={[{ chave: "nome", titulo: "Candidato" }, { chave: "cargo", titulo: "Vaga" }, { chave: "data", titulo: "Data" }, { chave: "hora", titulo: "Hora" }]} /> : null}
-          {pathname === "/avaliacoes" ? <Listagem titulo="Avaliações" caminho="/api/v1/empresa/avaliacoes" novo="/colaboradores" colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "ciclo", titulo: "Ciclo" }, { chave: "area", titulo: "Área" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/relatorios/encaminhamentos" ? <Listagem titulo="Candidatos encaminhados" caminho="/api/v1/empresa/encaminhamentos" novo="/vagas" colunas={[{ chave: "nome", titulo: "Candidato" }, { chave: "cargo", titulo: "Vaga" }, { chave: "data", titulo: "Convocação" }, { chave: "data_entrevista", titulo: "Entrevista" }, { chave: "hora", titulo: "Hora" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/relatorios/documentos" ? <Listagem titulo="Documentos" caminho="/api/v1/empresa/documentos" novo="/colaboradores" colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "documentos", titulo: "Contrato" }, { chave: "inicio", titulo: "Início" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/relatorios/seguro" ? <Listagem titulo="Seguro de vida" caminho="/api/v1/empresa/seguro" novo="/colaboradores" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "cpf", titulo: "CPF" }, { chave: "inicio", titulo: "Início" }, { chave: "fim", titulo: "Fim" }]} /> : null}
+          {pathname === "/relatorios/calendario" ? <Listagem titulo="Calendário" caminho="/api/v1/empresa/calendario" novo="/vagas" colunas={[{ chave: "nome", titulo: "Compromisso" }, { chave: "cargo", titulo: "Vaga" }, { chave: "data", titulo: "Data" }, { chave: "hora", titulo: "Início" }, { chave: "termino", titulo: "Término" }]} /> : null}
+          {pathname === "/avaliacoes" ? <Listagem titulo="Avaliações" caminho="/api/v1/empresa/avaliacoes" novo="/colaboradores" colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "ciclo", titulo: "Ciclo" }, { chave: "area", titulo: "Área" }, { chave: "data", titulo: "Data" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
           {pathname === "/holerite" ? <Listagem titulo="Holerites" caminho="/api/v1/empresa/holerites" novo="/colaboradores" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "competencia", titulo: "Competência" }, { chave: "bruto", titulo: "Bruto" }, { chave: "liquido", titulo: "Líquido" }]} /> : null}
-          {pathname === "/usuarios" ? <Listagem titulo="Usuários" caminho="/api/v1/empresa/usuarios" novo="/usuarios/novo" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "email", titulo: "E-mail" }, { chave: "telefone", titulo: "Telefone" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/usuarios" ? <Listagem titulo="Usuários" caminho="/api/v1/empresa/usuarios" novo="/usuarios/novo" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "email", titulo: "E-mail" }, { chave: "tipo", titulo: "Tipo" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
           {pathname === "/usuarios/novo" ? <Formulario titulo="Cadastrar usuário" destino="/api/v1/empresa/usuarios" voltar="/usuarios" campos={[["nome", "Nome", "text"], ["email", "E-mail", "email"], ["telefone", "Telefone", "text"], ["senha", "Senha", "password"]]} /> : null}
           {pathname === "/empresa/filial" ? <Formulario titulo="Cadastrar filial" destino="/api/v1/empresa/filiais" voltar="/empresa" campos={[["nome", "Nome", "text"], ["cnpj", "CNPJ", "text"], ["email", "E-mail", "email"], ["cidade", "Cidade", "text"]]} /> : null}
           {pathname === "/empresa" ? <EmpresaDados /> : null}
           {pathname === "/faturas" ? <Faturas /> : null}
-          {pathname === "/vagas" ? <Consulta titulo="Vagas" caminho="/api/v1/empresa/vagas" colunas={[{ chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "cidade", titulo: "Cidade" }, { chave: "situacao", titulo: "Situação" }, { chave: "dataabertura", titulo: "Abertura" }]} /> : null}
-          {pathname === "/contratados" ? <Consulta titulo="Contratados" caminho="/api/v1/empresa/contratados" colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "inicio", titulo: "Início" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/vagas" ? <Consulta titulo="Vagas" caminho="/api/v1/empresa/vagas" colunas={[{ chave: "codigo", titulo: "Código" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "vagas", titulo: "Vagas" }, { chave: "salario", titulo: "Faixa salarial" }, { chave: "cidade", titulo: "Cidade" }, { chave: "periodo", titulo: "Período" }, { chave: "situacao", titulo: "Situação" }, { chave: "dataabertura", titulo: "Abertura" }]} /> : null}
+          {pathname === "/contratados" ? <Consulta titulo="Contratados" caminho="/api/v1/empresa/contratados" colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "inicio", titulo: "Contratação" }, { chave: "departamento", titulo: "Departamento" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Modalidade" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
           {pathname === "/" ? <Inicio acessos={acessosLiberados(itens)} /> : null}
           {pathname === "/opcao" && link && !atual ? <Painel titulo="Opção não liberada" texto="Esta tela não faz parte das opções deste usuário." /> : null}
           {pathname === "/opcao" && atual ? <Painel titulo={atual.label} texto="Esta opção ainda será ligada. O nome é o mesmo do portal que a empresa já usa." detalhe={atual.link ?? undefined} /> : null}
@@ -353,7 +353,7 @@ function FundoRoxo({ children, className = "", papel }: { children: ReactNode; c
 }
 
 function EmpresaDados() {
-  const dados = useQuery({ queryKey: ["empresa-dados"], queryFn: () => api<{ nome: string; cnpj: string | null; email: string | null; cidade: string | null; filiais: Array<{ nome: string; cnpj: string | null; cidade: string | null }> }>("/api/v1/empresa/empresa") });
+  const dados = useQuery({ queryKey: ["empresa-dados"], queryFn: () => api<{ nome: string; razao_social: string | null; cnpj: string | null; email: string | null; telefone: string | null; cidade: string | null; uf: string | null; responsavel: string | null; filiais: Array<{ nome: string; cnpj: string | null; cidade: string | null }> }>("/api/v1/empresa/empresa") });
   const empresa = dados.data?.data;
   const navigate = useNavigate();
   return (
@@ -361,7 +361,7 @@ function EmpresaDados() {
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-extrabold">{empresa?.nome || "Empresa"}</h2>
-          <p className="text-sm text-slate-500">{[empresa?.cnpj, empresa?.cidade, empresa?.email].filter(Boolean).join(" · ")}</p>
+          <p className="text-sm text-slate-500">{[empresa?.razao_social, empresa?.cnpj, [empresa?.cidade, empresa?.uf].filter(Boolean).join("/"), empresa?.telefone, empresa?.email, empresa?.responsavel].filter(Boolean).join(" · ")}</p>
         </div>
         <button className="rounded-xl bg-[#5b21b6] px-4 py-2 text-sm font-bold text-white" onClick={() => navigate("/empresa/filial")}>Cadastrar filial</button>
       </div>
@@ -420,7 +420,9 @@ function destinoDoLink(link: string): string {
   if (base === "cadastrar-feriado.php") return "/feriados/novo";
   if (base === "relatorio-ponto-em-massa.php") return "/ponto/relatorio";
   if (base === "buscar-faturas.php") return "/faturas";
+  if (base === "buscar-contratados.php") return "/contratados";
   if (base === "buscar-vagas.php") return "/vagas";
+  if (base === "cadastrar-vaga-estagio.php") return "/vagas/nova?tipo=1";
   if (base === "buscar-candidato.php") return "/colaboradores";
   if (base === "banco-de-talentos.php") return "/talentos";
   if (base === "cadastrar-candidato.php") return "/talentos/novo";

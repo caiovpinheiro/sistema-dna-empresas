@@ -17,7 +17,7 @@ export class PortalDadosService {
 
   async painel(usuarioId: string, empresaId: string) {
     await this.garantir(usuarioId, empresaId);
-    const contagem = await this.db.query<{ ativos: string; vagas: string; contratos: string }>(`
+    const contagem = await this.db.query<{ ativos: string; vagas: string; contratos: string; batidas: string }>(`
       select
         (select count(distinct pessoa)::text from (
           select cv.id_candidato as pessoa
@@ -34,10 +34,17 @@ export class PortalDadosService {
         ) pessoas) as ativos,
         (select count(*) from dna_work.vaga
           where id_empresa = $1 and coalesce(status, 0) <> 2)::text as vagas,
-        (select count(*) from dna_work.conratacaovaga where id_empresa = $1)::text as contratos
+        (select count(*) from dna_work.conratacaovaga where id_empresa = $1)::text as contratos,
+        (select count(*)::text
+          from dna_work.tabela_ponto t
+          join dna_work.colaborador col on col.id_colaborador = t.id_colaborador
+          where col.id_empresa = $1
+            and coalesce(t.excluido, 0) = 0
+            and replace(t.data, '-', '/') like to_char((current_timestamp at time zone 'America/Sao_Paulo'), 'YYYY/MM') || '/%'
+        ) as batidas
     `, [empresaId]);
-    const empresa = await this.db.query<{ nome: string | null; cnpj: string | null }>(`
-      select coalesce(nome_fantasia, razao_social) as nome, cnpj
+    const empresa = await this.db.query<{ nome: string | null; cnpj: string | null; ponto: number | null }>(`
+      select coalesce(nome_fantasia, razao_social) as nome, cnpj, ponto
       from dna_work.empresa where id_empresa = $1
     `, [empresaId]);
     return {
@@ -46,27 +53,32 @@ export class PortalDadosService {
       colaboradoresAtivos: Number(contagem.rows[0]?.ativos ?? 0),
       vagasAbertas: Number(contagem.rows[0]?.vagas ?? 0),
       contratos: Number(contagem.rows[0]?.contratos ?? 0),
+      batidasMes: Number(contagem.rows[0]?.batidas ?? 0),
+      pontoAtivo: Number(empresa.rows[0]?.ponto) === 1,
     };
   }
 
   async colaboradores(usuarioId: string, empresaId: string, busca: string) {
     await this.garantir(usuarioId, empresaId);
     const rows = await this.db.query(`
-      select nome, email, celular, cargo, contrato, datainicio, situacao
+      select nome, email, celular, cargo, departamento, modalidade, contrato, datainicio, situacao
       from (
-        select c.nome, c.email, c.celular, v.cargo, m.descricao as contrato, cv.datainicio,
+        select c.nome, c.email, c.celular, v.cargo, col.departamento, m.descricao as modalidade, m.descricao as contrato, cv.datainicio,
                case when cv.status = 2 or nullif(btrim(cv.data_demicao), '') is not null then 'Encerrado' else 'Ativo' end as situacao
         from dna_work.conratacaovaga cv
         join dna_work.candidato c on c.id_candidato = cv.id_candidato
         left join dna_work.vaga v on v.id_vaga = cv.id_vaga
-        left join dna_work.modalidade_vaga m on m.id = v.tipo_vaga
+        left join dna_work.modalidade_vaga m on m.id::text = v.tipo_vaga::text
+        left join dna_work.colaborador col on col.id_candidato = c.id_candidato
+          and col.id_empresa = coalesce(nullif(btrim(cv.id_empresa), ''), v.id_empresa)
         where coalesce(nullif(btrim(cv.id_empresa), ''), v.id_empresa) = $1
-          and ($2 = '' or c.nome ilike $3 or coalesce(v.cargo, '') ilike $3)
+          and ($2 = '' or c.nome ilike $3 or coalesce(v.cargo, '') ilike $3 or coalesce(col.departamento, '') ilike $3)
         union all
-        select c.nome, c.email, c.celular, col.cargo, null::text, col.data_inicio,
+        select c.nome, c.email, c.celular, col.cargo, col.departamento, m.descricao, m.descricao, col.data_inicio,
                case when col.status_colaborador = 1 then 'Ativo' else 'Inativo' end
         from dna_work.colaborador col
         join dna_work.candidato c on c.id_candidato = col.id_candidato
+        left join dna_work.modalidade_vaga m on m.id::text = col.tipo_vaga::text
         where col.id_empresa = $1
           and not exists (
             select 1
@@ -75,7 +87,7 @@ export class PortalDadosService {
             where cv.id_candidato = col.id_candidato
               and coalesce(nullif(btrim(cv.id_empresa), ''), v.id_empresa) = col.id_empresa
           )
-          and ($2 = '' or c.nome ilike $3 or coalesce(col.cargo, '') ilike $3)
+          and ($2 = '' or c.nome ilike $3 or coalesce(col.cargo, '') ilike $3 or coalesce(col.departamento, '') ilike $3)
       ) pessoas
       order by nome
       limit 500
@@ -86,7 +98,7 @@ export class PortalDadosService {
   async vagas(usuarioId: string, empresaId: string, busca: string) {
     await this.garantir(usuarioId, empresaId);
     const rows = await this.db.query(`
-      select v.id_vaga, v.cargo, v.status, v.dataabertura, v.salario, v.cidade, m.descricao as contrato
+      select v.comparador as codigo, v.cargo, v.quantidade_posicoes as vagas, v.status, v.dataabertura, v.salario, v.cidade, v.periodo, m.descricao as contrato
       from dna_work.vaga v
       left join dna_work.modalidade_vaga m on m.id = v.tipo_vaga
       where v.id_empresa = $1
@@ -103,7 +115,10 @@ export class PortalDadosService {
   async contratados(usuarioId: string, empresaId: string, busca: string) {
     await this.garantir(usuarioId, empresaId);
     const rows = await this.db.query(`
-      select c.nome, v.cargo, m.descricao as contrato, cv.datainicio, cv.data_demicao, cv.status
+      select c.nome, v.cargo, m.descricao as contrato, cv.datainicio, cv.data_demicao, cv.status,
+             (select col.departamento from dna_work.colaborador col
+               where col.id_candidato = c.id_candidato and col.id_empresa = coalesce(nullif(btrim(cv.id_empresa), ''), v.id_empresa)
+               limit 1) as departamento
       from dna_work.conratacaovaga cv
       join dna_work.candidato c on c.id_candidato = cv.id_candidato
       left join dna_work.vaga v on v.id_vaga = cv.id_vaga
@@ -116,6 +131,7 @@ export class PortalDadosService {
     return rows.rows.map((row) => ({
       nome: row.nome,
       cargo: row.cargo,
+      departamento: row.departamento,
       contrato: row.contrato,
       inicio: row.datainicio,
       situacao: row.data_demicao || Number(row.status) === 2 ? "Encerrado" : "Ativo",
@@ -125,7 +141,14 @@ export class PortalDadosService {
   async escalas(usuarioId: string, empresaId: string) {
     await this.garantir(usuarioId, empresaId);
     const rows = await this.db.query(`
-      select id, nome, segunda_feira, terca_feira, quarta_feira, quinta_feira, sexta_feira, sabado, domingo
+      select id, nome,
+             case when segunda_feira::text = '1' then 'Trabalha' else 'Folga' end as segunda,
+             case when terca_feira::text = '1' then 'Trabalha' else 'Folga' end as terca,
+             case when quarta_feira::text = '1' then 'Trabalha' else 'Folga' end as quarta,
+             case when quinta_feira::text = '1' then 'Trabalha' else 'Folga' end as quinta,
+             case when sexta_feira::text = '1' then 'Trabalha' else 'Folga' end as sexta,
+             case when sabado::text = '1' then 'Trabalha' else 'Folga' end as sabado,
+             case when domingo::text = '1' then 'Trabalha' else 'Folga' end as domingo
       from dna_work.ponto_turno_base
       where id_empresa = $1
       order by nome
@@ -244,12 +267,19 @@ export class PortalDadosService {
   async relatorioPonto(usuarioId: string, empresaId: string) {
     await this.garantir(usuarioId, empresaId);
     const rows = await this.db.query(`
-      select c.nome, col.cargo, col.departamento, col.data_inicio, carga.nome as carga
-      from dna_work.colaborador col
+      select c.nome,
+             t.data,
+             coalesce(nullif(btrim(t.entrada_editado), ''), t.entrada) as entrada,
+             coalesce(nullif(btrim(t.saida_editado), ''), t.saida) as saida,
+             t.horas_trabalhadas as horas
+      from dna_work.tabela_ponto t
+      join dna_work.colaborador col on col.id_colaborador = t.id_colaborador
       left join dna_work.candidato c on c.id_candidato = col.id_candidato
-      left join dna_work.ponto_carga_base carga on carga.id = col.carga_base
-      where col.id_empresa = $1 and col.status_ponto = 1
-      order by c.nome
+      where col.id_empresa = $1
+        and coalesce(t.excluido, 0) = 0
+        and t.data ~ '^[0-9]{4}[/-][0-9]{2}[/-][0-9]{2}$'
+      order by replace(t.data, '-', '/') desc, t.id desc
+      limit 200
     `, [empresaId]);
     return rows.rows;
   }
@@ -299,7 +329,7 @@ export class PortalDadosService {
   async empresa(usuarioId: string, empresaId: string) {
     await this.garantir(usuarioId, empresaId);
     const atual = await this.db.query(`
-      select coalesce(nome_fantasia, razao_social) as nome, cnpj, email, telefone, cidade, uf
+      select coalesce(nome_fantasia, razao_social) as nome, razao_social, cnpj, email, telefone, cidade, uf, responsavel
       from dna_work.empresa where id_empresa = $1
     `, [empresaId]);
     const filiais = await this.db.query(`
@@ -323,6 +353,13 @@ export class PortalDadosService {
     await this.garantir(usuarioId, empresaId);
     const rows = await this.db.query(`
       select u.id_u as id, u.nome_u as nome, u.email_u as email, u.telefone_u as telefone,
+             case u.tipo::text
+               when '1' then 'Administrador'
+               when '2' then 'Gerente'
+               when '3' then 'Comercial'
+               when '4' then 'Operador'
+               else coalesce(u.tipo::text, '')
+             end as tipo,
              case when u.status = 1 then 'Ativo' else 'Inativo' end as situacao
       from dna_work.usuario_empresa u
       where u.empresa_u = $1
@@ -380,7 +417,8 @@ export class PortalDadosService {
   async talentos(usuarioId: string, empresaId: string) {
     await this.garantir(usuarioId, empresaId);
     const rows = await this.db.query(`
-      select nome, cpf, email, celular, cidade from dna_work.candidato
+      select nome, cpf, email, celular, bairro, cidade, estado, curso, modalidadecurso as ensino, datacadastro
+      from dna_work.candidato
       where id_empresa = $1 order by nome limit 200
     `, [empresaId]);
     return rows.rows;
@@ -414,26 +452,27 @@ export class PortalDadosService {
   async documentos(usuarioId: string, empresaId: string) {
     await this.garantir(usuarioId, empresaId);
     const rows = await this.db.query(`
-      select c.nome, count(d.tipo)::text as documentos
-      from dna_work.conratacaovaga cv
-      join dna_work.candidato c on c.id_candidato = cv.id_candidato
-      left join dna_work.docs_candidatos d on d.id_candidato = c.id_candidato
-      where cv.id_empresa = $1 and cv.status = 1 and coalesce(cv.data_demicao, '') = ''
-      group by c.nome
-      order by c.nome
+      select c.nome, g.nome_contrato as documentos, g.datainicio as inicio,
+             case when g.devolvido::text in ('1', 'S', 's') then 'Devolvido' else 'Pendente' end as situacao
+      from dna_work.contratos_gerados g
+      left join dna_work.candidato c on c.id_candidato = g.id_candidato
+      where g.id_empresa = $1
+      order by g.data desc nulls last
+      limit 200
     `, [empresaId]);
-    return rows.rows.map((row) => ({ ...row, situacao: Number(row.documentos) > 0 ? "Com documento" : "Pendente" }));
+    return rows.rows;
   }
 
   async seguro(usuarioId: string, empresaId: string) {
     await this.garantir(usuarioId, empresaId);
     const rows = await this.db.query(`
-      select c.nome, v.cargo, cv.datainicio as inicio
-      from dna_work.conratacaovaga cv
-      join dna_work.candidato c on c.id_candidato = cv.id_candidato
-      left join dna_work.vaga v on v.id_vaga = cv.id_vaga
-      where cv.id_empresa = $1 and cv.status = 1 and coalesce(cv.data_demicao, '') = ''
-      order by c.nome
+      select c.nome, v.cargo, g.datainicio as inicio, g.datafim as fim, c.cpf
+      from dna_work.contratos_gerados g
+      join dna_work.candidato c on c.id_candidato = g.id_candidato
+      left join dna_work.vaga v on v.id_vaga::text = g.vaga::text
+      where g.id_empresa = $1
+      order by g.datainicio desc nulls last
+      limit 200
     `, [empresaId]);
     return rows.rows;
   }
@@ -441,12 +480,11 @@ export class PortalDadosService {
   async calendario(usuarioId: string, empresaId: string) {
     await this.garantir(usuarioId, empresaId);
     const rows = await this.db.query(`
-      select c.nome, v.cargo, e.data_entrevista as data, e.hora
-      from dna_work.emcaminhamento e
-      join dna_work.vaga v on v.id_vaga = e.id_vaga
-      left join dna_work.candidato c on c.id_candidato = e.id_candidato
-      where v.id_empresa = $1 and coalesce(e.data_entrevista, '') <> ''
-      order by e.data_entrevista desc
+      select coalesce(nullif(btrim(d.title), ''), v.cargo) as nome, v.cargo, d.data, d.inicio as hora, d.termino, d.link
+      from dna_work.entrevista_datas d
+      join dna_work.vaga v on v.comparador::text = d.comparador::text
+      where v.id_empresa = $1
+      order by d.data desc nulls last
       limit 200
     `, [empresaId]);
     return rows.rows;
@@ -470,7 +508,8 @@ export class PortalDadosService {
   async holerites(usuarioId: string, empresaId: string) {
     await this.garantir(usuarioId, empresaId);
     const rows = await this.db.query(`
-      select h.nome_candidato as nome, h.cargo, h.copentencia as competencia, h.salario_brudo as bruto, h.total_vencimentos as liquido
+      select h.nome_candidato as nome, h.cargo, h.copentencia as competencia, h.salario_brudo as bruto,
+             coalesce(h.saldo_salario, h.total_vencimentos) as liquido
       from dna_work.holerite h
       join dna_work.vaga v on v.id_vaga = h.id_vaga
       where v.id_empresa = $1

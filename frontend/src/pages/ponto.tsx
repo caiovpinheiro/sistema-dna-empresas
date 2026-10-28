@@ -5,7 +5,7 @@ import { ApiError, api } from "../lib/api";
 
 type Linha = Record<string, string | number | null>;
 
-export function Listagem({ titulo, caminho, novo, colunas }: { titulo: string; caminho: string; novo: string; colunas: Array<{ chave: string; titulo: string }> }) {
+export function Listagem({ titulo, caminho, novo, colunas }: { titulo: string; caminho: string; novo?: string; colunas: Array<{ chave: string; titulo: string }> }) {
   const lista = useQuery({ queryKey: [caminho], queryFn: () => api<Linha[]>(caminho) });
   const linhas = Array.isArray(lista.data?.data) ? lista.data.data : [];
   const navigate = useNavigate();
@@ -16,7 +16,7 @@ export function Listagem({ titulo, caminho, novo, colunas }: { titulo: string; c
           <h2 className="text-xl font-semibold tracking-tight text-[#24182d]">{titulo}</h2>
           {!lista.isLoading && !lista.isError ? <p className="text-sm text-[#6f6578]">{linhas.length === 1 ? "1 registro" : `${linhas.length} registros`}</p> : null}
         </div>
-        <button className="rounded-lg bg-[#6a4b84] px-4 py-2 text-sm font-semibold text-white hover:bg-[#593d70]" onClick={() => navigate(novo)}>Cadastrar</button>
+        {novo ? <button className="rounded-lg bg-[#6a4b84] px-4 py-2 text-sm font-semibold text-white hover:bg-[#593d70]" onClick={() => navigate(novo)}>Cadastrar</button> : null}
       </div>
       {lista.isLoading ? <p className="text-sm text-[#7a6b86]">Carregando…</p> : null}
       {lista.isError ? <p className="text-sm text-rose-700">{lista.error instanceof ApiError ? lista.error.message : "Não foi possível carregar esta lista."}</p> : null}
@@ -74,8 +74,8 @@ export function VagaNova({ tipo }: { tipo: string }) {
 }
 
 export function RelatorioPonto() {
-  return <Listagem titulo="Cartão ponto" caminho="/api/v1/empresa/ponto/relatorio" novo="/colaboradores" colunas={[
-    { chave: "nome", titulo: "Colaborador" }, { chave: "cargo", titulo: "Cargo" }, { chave: "departamento", titulo: "Departamento" }, { chave: "carga", titulo: "Carga" }, { chave: "data_inicio", titulo: "Início" },
+  return <Listagem titulo="Cartão ponto" caminho="/api/v1/empresa/ponto/relatorio" colunas={[
+    { chave: "nome", titulo: "Colaborador" }, { chave: "data", titulo: "Data" }, { chave: "entrada", titulo: "Entrada" }, { chave: "saida", titulo: "Saída" }, { chave: "horas", titulo: "Horas" },
   ]} />;
 }
 
