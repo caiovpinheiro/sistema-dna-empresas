@@ -173,8 +173,11 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
     data: await dados.painel(request.user.sub, request.user.empresaId!),
   }));
   app.get("/api/v1/empresa/colaboradores", async (request) => {
-    const busca = ler(z.object({ q: z.string().optional() }), request.query).q?.trim() ?? "";
-    return { success: true, data: await dados.colaboradores(request.user.sub, request.user.empresaId!, busca) };
+    const query = ler(z.object({
+      q: z.string().optional(),
+      status: z.enum(["ativo", "inativo", "todos"]).optional(),
+    }), request.query);
+    return { success: true, data: await dados.colaboradores(request.user.sub, request.user.empresaId!, query.q?.trim() ?? "", query.status ?? "todos") };
   });
   app.get("/api/v1/empresa/vagas", async (request) => {
     const busca = ler(z.object({ q: z.string().optional() }), request.query).q?.trim() ?? "";
@@ -189,6 +192,25 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   app.get("/api/v1/empresa/cargas", async (request) => ({ success: true, data: await dados.cargas(request.user.sub, request.user.empresaId!) }));
   app.post("/api/v1/empresa/cargas", async (request) => ({ success: true, data: await dados.salvarCarga(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
   app.get("/api/v1/empresa/ponto/relatorio", async (request) => ({ success: true, data: await dados.relatorioPonto(request.user.sub, request.user.empresaId!) }));
+  app.get("/api/v1/empresa/ponto/colaboradores", async (request) => {
+    const query = ler(z.object({
+      q: z.string().optional(),
+      status: z.enum(["ativo", "inativo", "todos"]).optional(),
+    }), request.query);
+    return {
+      success: true,
+      data: await dados.colaboradoresPonto(request.user.sub, request.user.empresaId!, query.q?.trim() ?? "", query.status ?? "todos"),
+    };
+  });
+  app.get("/api/v1/empresa/detalhe/:tipo/:id", async (request) => {
+    const { tipo, id } = request.params as { tipo: string; id: string };
+    return { success: true, data: await dados.detalhe(request.user.sub, request.user.empresaId!, tipo, id) };
+  });
+  app.get("/api/v1/empresa/ponto/colaborador/:id", async (request) => {
+    const periodo = ler(z.object({ de: z.string().optional(), ate: z.string().optional() }), request.query);
+    const id = (request.params as { id: string }).id;
+    return { success: true, data: await dados.relatorioPontoColaborador(request.user.sub, request.user.empresaId!, id, periodo.de, periodo.ate) };
+  });
   app.get("/api/v1/empresa/feriados", async (request) => ({ success: true, data: await dados.feriados(request.user.sub, request.user.empresaId!) }));
   app.post("/api/v1/empresa/feriados", async (request) => ({ success: true, data: await dados.salvarFeriado(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
   app.post("/api/v1/empresa/colaboradores", async (request) => ({ success: true, data: await dados.salvarColaborador(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
