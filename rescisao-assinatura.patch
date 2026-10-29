@@ -1,0 +1,1628 @@
+From c043d9ebab120f280984c0a5c06cab93fcfc12a7 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Thu, 29 Oct 2026 14:32:55 +0000
+Subject: [PATCH] =?UTF-8?q?Confirma=20a=20assinatura=20digital=20da=20resc?=
+ =?UTF-8?q?is=C3=A3o=20e=20acompanha=20o=20link=20de=20cada=20parte.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ backend/src/lib/assinatura-rescisao.ts        | 339 ++++++++++++++++
+ backend/src/lib/zapsign.ts                    |  66 +++-
+ .../repositories/contratacao.repository.ts    |  86 +++-
+ backend/src/routes/index.ts                   |  31 +-
+ backend/src/schemas/contratacao.ts            |  10 +
+ backend/src/services/contratacao.service.ts   | 371 ++++++++++++++++--
+ backend/test/assinatura-rescisao.test.ts      |  93 +++++
+ .../src/components/documentos-contratacao.tsx |  43 +-
+ frontend/src/components/painel-assinatura.tsx | 287 ++++++++++++++
+ frontend/src/pages/RescisaoDetailPage.tsx     |  24 +-
+ .../migration.sql                             |   5 +
+ 11 files changed, 1314 insertions(+), 41 deletions(-)
+ create mode 100644 backend/src/lib/assinatura-rescisao.ts
+ create mode 100644 backend/test/assinatura-rescisao.test.ts
+ create mode 100644 frontend/src/components/painel-assinatura.tsx
+ create mode 100644 prisma/migrations/20261028220000_rescisao_assinatura/migration.sql
+
+diff --git a/backend/src/lib/assinatura-rescisao.ts b/backend/src/lib/assinatura-rescisao.ts
+new file mode 100644
+index 0000000..e64bfca
+--- /dev/null
++++ b/backend/src/lib/assinatura-rescisao.ts
+@@ -0,0 +1,339 @@
++export type FlagsPapel = { responsavel: number; administrativo: number; rh: number; financeiro: number; supervisor: number };
++export type FlagsEscola = { diretor: number; representante: number; supervisor: number };
++
++export type ParteAssinatura = {
++  parte: string;
++  tipo: string;
++  nome: string;
++  email: string;
++  status: string;
++  data: string | null;
++  token: string | null;
++  url: string | null;
++};
++
++export type ContextoAssinatura = {
++  estagio: boolean;
++  hoje: string;
++  agora: string;
++  candidato: {
++    nome: string;
++    email: string;
++    nascimento: string | null;
++    nomeResponsavel: string;
++    emailResponsavel: string;
++  };
++  empresa: {
++    email: string;
++    responsavel: string;
++    nomeAdministrativo: string;
++    emailAdministrativo: string;
++    nomeRh: string;
++    emailRh: string;
++    nomeFinanceiro: string;
++    emailFinanceiro: string;
++    flags: FlagsPapel | null;
++  };
++  supervisor: { nome: string; email: string } | null;
++  escola: {
++    responsavel: string;
++    responsavelEmail: string;
++    representante: string;
++    representanteEmail: string;
++    flags: FlagsEscola | null;
++  } | null;
++  agenteNome: string;
++};
++
++export type PainelAssinatura = {
++  nome: string;
++  status: string;
++  enviado_em: string | null;
++  original_url: string | null;
++  preview_url: string | null;
++  signatarios: Array<{
++    parte: string;
++    tipo: string;
++    nome: string;
++    email: string;
++    status: string;
++    data: string | null;
++    token: string | null;
++    url: string | null;
++    editar: string | null;
++    baixar: boolean;
++  }>;
++};
++
++function texto(value: string | null | undefined): string {
++  return (value ?? "").trim();
++}
++
++function emailDe(value: string | null | undefined): string {
++  return texto(value).toLowerCase();
++}
++
++function ligado(value: number | null | undefined): boolean {
++  return Number(value) === 1;
++}
++
++export function menorDeIdade(nascimento: string | null | undefined, hoje: string): boolean {
++  const bruto = texto(nascimento).slice(0, 10).replaceAll("/", "-");
++  const [ano, mes, dia] = bruto.split("-").map(Number);
++  const [anoHoje, mesHoje, diaHoje] = hoje.slice(0, 10).split("-").map(Number);
++  if (!ano || !mes || !dia || !anoHoje || !mesHoje || !diaHoje) return false;
++  let idade = anoHoje - ano;
++  if (mesHoje < mes || (mesHoje === mes && diaHoje < dia)) idade -= 1;
++  return idade >= 0 && idade < 18;
++}
++
++export function rotuloStatus(status: string | null | undefined): string {
++  const valor = texto(status).toLowerCase();
++  if (valor.includes("refus") || valor.includes("reject") || valor === "recusado") return "Recusado";
++  if (valor === "signed" || valor === "assinado") return "Assinado";
++  return "Pendente";
++}
++
++export function rotuloDocumento(status: string | null | undefined, temEnvelope: boolean): string {
++  if (!temEnvelope) return "Não enviado";
++  const valor = texto(status).toLowerCase();
++  if (valor.includes("refus") || valor.includes("reject") || valor === "recusado") return "Recusado";
++  if (valor === "signed" || valor === "assinado") return "Assinado";
++  return "Pendente";
++}
++
++export function rotuloColuna(status: string | null | undefined, temEnvelope: boolean): string {
++  if (!temEnvelope) return "Não assina digitalmente";
++  const valor = texto(status).toLowerCase();
++  if (valor.includes("refus") || valor.includes("reject") || valor === "recusado") return "Recusado";
++  if (valor === "signed" || valor === "assinado") return "Assinado";
++  return "Aguardando";
++}
++
++export function linkVerificar(token: string | null | undefined, url: string | null | undefined): string | null {
++  const chave = texto(token);
++  if (chave) return `https://app.zapsign.com.br/verificar/${chave}`;
++  const endereco = texto(url);
++  return endereco || null;
++}
++
++export function dataAssinaturaBr(value: string | null | undefined): string | null {
++  const bruto = texto(value);
++  if (!bruto) return null;
++  const encontrado = bruto.match(/(\d{4})[-/](\d{2})[-/](\d{2})(?:[T ](\d{2}):(\d{2}):(\d{2}))?/);
++  if (!encontrado) return bruto;
++  const [, ano, mes, dia, hora, minuto, segundo] = encontrado;
++  if (!hora) return `${dia}/${mes}/${ano}`;
++  return `${dia}/${mes}/${ano} ${hora}:${minuto}:${segundo}`;
++}
++
++export function dataEnvioBr(value: string | Date | null | undefined): string | null {
++  if (!value) return null;
++  if (value instanceof Date) {
++    const partes = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(value);
++    return dataAssinaturaBr(partes);
++  }
++  return dataAssinaturaBr(value.slice(0, 10));
++}
++
++function parte(tipo: string, rotulo: string, nome: string, email: string, agora: string, assinado = false): ParteAssinatura | null {
++  const endereco = emailDe(email);
++  if (!endereco && !assinado) return null;
++  return {
++    parte: rotulo,
++    tipo,
++    nome: texto(nome) || rotulo,
++    email: endereco,
++    status: assinado ? "signed" : "new",
++    data: assinado ? agora : null,
++    token: null,
++    url: null,
++  };
++}
++
++export function montarPartes(contexto: ContextoAssinatura): ParteAssinatura[] {
++  const lista: ParteAssinatura[] = [];
++  const candidato = parte("candidato", "Candidato", contexto.candidato.nome, contexto.candidato.email, contexto.agora);
++  if (candidato) lista.push(candidato);
++
++  if (menorDeIdade(contexto.candidato.nascimento, contexto.hoje)) {
++    const responsavel = parte(
++      "responsavel-candidato",
++      "Responsável pelo Candidato",
++      contexto.candidato.nomeResponsavel || "Responsável",
++      contexto.candidato.emailResponsavel,
++      contexto.agora,
++    );
++    if (responsavel && responsavel.email !== candidato?.email) lista.push(responsavel);
++  }
++
++  const empresa = contexto.empresa;
++  const flags = empresa.flags;
++  const papeis: Array<[boolean, string, string, string, string]> = [
++    [!flags || ligado(flags.responsavel), "empresa", "Empresa", empresa.responsavel || "Empresa", empresa.email],
++    [ligado(flags?.administrativo), "administrativo", "Empresa Responsável Administrativo", empresa.nomeAdministrativo, empresa.emailAdministrativo],
++    [ligado(flags?.rh), "Rh", "Empresa Responsável RH", empresa.nomeRh, empresa.emailRh],
++    [ligado(flags?.financeiro), "financeiro", "Empresa Responsável Financeiro", empresa.nomeFinanceiro, empresa.emailFinanceiro],
++  ];
++  const emailsEmpresa = new Set<string>();
++  for (const [entra, tipo, rotulo, nome, email] of papeis) {
++    if (!entra) continue;
++    const item = parte(tipo, rotulo, nome, email, contexto.agora);
++    if (!item || emailsEmpresa.has(item.email)) continue;
++    emailsEmpresa.add(item.email);
++    lista.push(item);
++  }
++
++  if (ligado(flags?.supervisor) && contexto.supervisor) {
++    const supervisor = parte("supervidor", "Empresa Supervisor de Estágio", contexto.supervisor.nome, contexto.supervisor.email, contexto.agora);
++    if (supervisor) lista.push(supervisor);
++  }
++
++  if (contexto.estagio && contexto.escola) {
++    const escola = contexto.escola;
++    const querDiretor = !escola.flags || ligado(escola.flags.diretor);
++    if (querDiretor) {
++      const diretor = parte("escola-diretor", "Instituição de Ensino Diretor", escola.responsavel, escola.responsavelEmail, contexto.agora);
++      if (diretor) lista.push(diretor);
++    }
++    if (ligado(escola.flags?.representante)) {
++      const representante = parte("escola-representante", "Instituição de Ensino", escola.representante, escola.representanteEmail, contexto.agora);
++      if (representante) lista.push(representante);
++    }
++  }
++
++  lista.push({
++    parte: "Agente",
++    tipo: "agente",
++    nome: texto(contexto.agenteNome) || "DNA Work",
++    email: "",
++    status: "signed",
++    data: contexto.agora,
++    token: null,
++    url: null,
++  });
++  return lista;
++}
++
++export function aplicarRetornoZap(
++  partes: ParteAssinatura[],
++  signers: Array<{ token?: string; name?: string; email?: string; status?: string; sign_url?: string; signed_at?: string | null }> | undefined,
++): ParteAssinatura[] {
++  const remotos = signers ?? [];
++  return partes.map((item) => {
++    if (item.tipo === "agente") return item;
++    const remoto = remotos.find((signer) => emailDe(signer.email) === item.email)
++      ?? remotos.find((signer) => texto(signer.name).toLowerCase() === item.nome.toLowerCase());
++    if (!remoto) return item;
++    const status = texto(remoto.status) || item.status;
++    return {
++      ...item,
++      status,
++      token: texto(remoto.token) || item.token,
++      url: texto(remoto.sign_url) || item.url,
++      data: status.toLowerCase() === "signed" ? (texto(remoto.signed_at) || item.data) : item.data,
++    };
++  });
++}
++
++export function mesclarRemotos(
++  locais: ParteAssinatura[],
++  remotos: Array<{ token?: string; email?: string; status?: string; sign_url?: string; signed_at?: string | null }>,
++): ParteAssinatura[] {
++  return locais.map((item) => {
++    if (item.tipo === "agente") return item;
++    const remoto = remotos.find((signer) => item.token && texto(signer.token) === item.token)
++      ?? remotos.find((signer) => emailDe(signer.email) === item.email);
++    if (!remoto) return item;
++    const status = texto(remoto.status) || item.status;
++    const assinado = status.toLowerCase() === "signed";
++    return {
++      ...item,
++      status,
++      token: texto(remoto.token) || item.token,
++      url: texto(remoto.sign_url) || item.url,
++      data: assinado ? (texto(remoto.signed_at) || item.data) : item.data,
++    };
++  });
++}
++
++export function apresentarPainel(input: {
++  nome: string;
++  statusDoc: string | null;
++  enviadoEm: string | Date | null;
++  originalUrl: string | null;
++  signedUrl: string | null;
++  signatarios: ParteAssinatura[] | null;
++  candidatoId: string | null;
++  empresaId: string | null;
++}): PainelAssinatura {
++  const temEnvelope = Boolean(input.signatarios?.length || input.statusDoc);
++  const signatarios = (input.signatarios ?? []).map((item) => {
++    const status = rotuloStatus(item.status);
++    const url = status === "Assinado" ? null : linkVerificar(item.token, item.url);
++    let editar: string | null = null;
++    if (item.tipo === "candidato" || item.tipo === "responsavel-candidato") {
++      editar = input.candidatoId ? `/candidatos/${input.candidatoId}` : null;
++    } else if (item.tipo === "empresa" || item.tipo === "administrativo" || item.tipo === "Rh" || item.tipo === "financeiro" || item.tipo === "supervidor") {
++      editar = input.empresaId ? `/empresas/${input.empresaId}` : null;
++    }
++    return {
++      parte: item.parte,
++      tipo: item.tipo,
++      nome: item.nome,
++      email: item.email,
++      status,
++      data: dataAssinaturaBr(item.data),
++      token: item.token,
++      url,
++      editar,
++      baixar: status === "Assinado",
++    };
++  });
++  return {
++    nome: input.nome,
++    status: rotuloDocumento(input.statusDoc, temEnvelope),
++    enviado_em: dataEnvioBr(input.enviadoEm),
++    original_url: input.originalUrl,
++    preview_url: input.signedUrl || input.originalUrl,
++    signatarios,
++  };
++}
++
++export function normalizarPartes(valor: unknown): ParteAssinatura[] {
++  const lista = typeof valor === "string" ? JSON.parse(valor) as unknown : valor;
++  if (!Array.isArray(lista)) return [];
++  return lista.flatMap((item) => {
++    if (!item || typeof item !== "object") return [];
++    const linha = item as Partial<ParteAssinatura>;
++    return [{
++      parte: texto(linha.parte) || "Assinante",
++      tipo: texto(linha.tipo) || "extra",
++      nome: texto(linha.nome),
++      email: emailDe(linha.email),
++      status: texto(linha.status) || "new",
++      data: texto(linha.data) || null,
++      token: texto(linha.token) || null,
++      url: texto(linha.url) || null,
++    }];
++  });
++}
++
++export function hojeSp(agora = new Date()): string {
++  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(agora);
++}
++
++export function agoraSp(agora = new Date()): string {
++  const partes = new Intl.DateTimeFormat("en-GB", {
++    timeZone: "America/Sao_Paulo",
++    hour12: false,
++    year: "numeric",
++    month: "2-digit",
++    day: "2-digit",
++    hour: "2-digit",
++    minute: "2-digit",
++    second: "2-digit",
++  }).formatToParts(agora);
++  const valor = (tipo: string) => partes.find((item) => item.type === tipo)?.value ?? "00";
++  return `${valor("year")}-${valor("month")}-${valor("day")}T${valor("hour")}:${valor("minute")}:${valor("second")}`;
++}
+diff --git a/backend/src/lib/zapsign.ts b/backend/src/lib/zapsign.ts
+index a19ef95..2369fb6 100644
+--- a/backend/src/lib/zapsign.ts
++++ b/backend/src/lib/zapsign.ts
+@@ -1,10 +1,18 @@
+ import { AppError } from "./errors.js";
+ 
+ export type ZapSigner = { name: string; email: string; external_id?: string };
+-export type ZapSignerResult = { name?: string; email?: string; status?: string; sign_url?: string };
++export type ZapSignerResult = {
++  token?: string;
++  name?: string;
++  email?: string;
++  status?: string;
++  sign_url?: string;
++  signed_at?: string | null;
++};
+ export type ZapDoc = {
+   token?: string;
+   status?: string;
++  original_file?: string | null;
+   signed_file?: string | null;
+   signers?: ZapSignerResult[];
+ };
+@@ -50,3 +58,59 @@ export async function criarDocumentoZapSign(input: {
+   }
+   return body;
+ }
++
++function endereco(apiUrl: string, caminho: string, apiToken: string): string {
++  const base = apiUrl.replace(/\/$/, "");
++  const separador = caminho.includes("?") ? "&" : "?";
++  return `${base}${caminho}${separador}api_token=${encodeURIComponent(apiToken)}`;
++}
++
++async function chamarZap<T>(url: string, init: RequestInit, falha: string): Promise<T> {
++  const response = await fetch(url, init);
++  const body = await response.json().catch(() => null) as T | null;
++  if (!response.ok || !body) {
++    throw new AppError(502, "ZAPSIGN_RECUSOU", falha, { status: response.status });
++  }
++  return body;
++}
++
++export async function buscarDocumentoZapSign(apiUrl: string, apiToken: string, docToken: string): Promise<ZapDoc> {
++  return chamarZap<ZapDoc>(endereco(apiUrl, `/api/v1/docs/${docToken}/`, apiToken), { method: "GET" }, "A ZapSign não devolveu o documento.");
++}
++
++export async function adicionarAssinanteZapSign(apiUrl: string, apiToken: string, docToken: string, signer: ZapSigner): Promise<ZapSignerResult> {
++  return chamarZap<ZapSignerResult>(endereco(apiUrl, `/api/v1/docs/${docToken}/add-signer/`, apiToken), {
++    method: "POST",
++    headers: { "Content-Type": "application/json" },
++    body: JSON.stringify({ name: signer.name, email: signer.email, auth_mode: "tokenEmail", lock_email: true }),
++  }, "A ZapSign não adicionou o assinante.");
++}
++
++export async function atualizarAssinanteZapSign(apiUrl: string, apiToken: string, signerToken: string, signer: { name: string; email: string }): Promise<ZapSignerResult> {
++  return chamarZap<ZapSignerResult>(endereco(apiUrl, `/api/v1/signers/${signerToken}/`, apiToken), {
++    method: "POST",
++    headers: { "Content-Type": "application/json" },
++    body: JSON.stringify({ name: signer.name, email: signer.email }),
++  }, "A ZapSign não atualizou o e-mail.");
++}
++
++export async function reenviarAssinanteZapSign(apiUrl: string, apiToken: string, signerToken: string): Promise<void> {
++  const response = await fetch(endereco(apiUrl, `/api/v1/signers/${signerToken}/notify/`, apiToken), { method: "POST" });
++  if (!response.ok) {
++    throw new AppError(502, "ZAPSIGN_RECUSOU", "A ZapSign não reenviou o link.", { status: response.status });
++  }
++}
++
++export async function removerAssinanteZapSign(apiUrl: string, apiToken: string, signerToken: string): Promise<void> {
++  const response = await fetch(endereco(apiUrl, `/api/v1/signer/${signerToken}/remove/`, apiToken), { method: "DELETE" });
++  if (!response.ok) {
++    throw new AppError(502, "ZAPSIGN_RECUSOU", "A ZapSign não excluiu o assinante.", { status: response.status });
++  }
++}
++
++export async function excluirDocumentoZapSign(apiUrl: string, apiToken: string, docToken: string): Promise<void> {
++  const response = await fetch(endereco(apiUrl, `/api/v1/docs/${docToken}/`, apiToken), { method: "DELETE" });
++  if (!response.ok) {
++    throw new AppError(502, "ZAPSIGN_RECUSOU", "A ZapSign não excluiu a assinatura.", { status: response.status });
++  }
++}
+diff --git a/backend/src/repositories/contratacao.repository.ts b/backend/src/repositories/contratacao.repository.ts
+index 2a386d9..71496f7 100644
+--- a/backend/src/repositories/contratacao.repository.ts
++++ b/backend/src/repositories/contratacao.repository.ts
+@@ -136,6 +136,11 @@ export class ContratacaoRepository {
+     await db.query(`ALTER TABLE dna_work.rescisao_documento ADD COLUMN IF NOT EXISTS assinatura character varying(80) DEFAULT 'Não assina digitalmente'`);
+     await db.query(`ALTER TABLE dna_work.rescisao_documento ADD COLUMN IF NOT EXISTS zapsign_token character varying(120)`);
+     await db.query(`ALTER TABLE dna_work.rescisao_documento ADD COLUMN IF NOT EXISTS sign_url text`);
++    await db.query(`ALTER TABLE dna_work.rescisao_documento ADD COLUMN IF NOT EXISTS signatarios jsonb`);
++    await db.query(`ALTER TABLE dna_work.rescisao_documento ADD COLUMN IF NOT EXISTS status_doc character varying(40)`);
++    await db.query(`ALTER TABLE dna_work.rescisao_documento ADD COLUMN IF NOT EXISTS original_url text`);
++    await db.query(`ALTER TABLE dna_work.rescisao_documento ADD COLUMN IF NOT EXISTS signed_url text`);
++    await db.query(`ALTER TABLE dna_work.rescisao_documento ADD COLUMN IF NOT EXISTS enviado_em timestamp without time zone`);
+   }
+ 
+   async salvarRescisao(db: Db, values: {
+@@ -188,30 +193,97 @@ export class ContratacaoRepository {
+       assinatura: string | null;
+       sign_url: string | null;
+       zapsign_token: string | null;
++      signatarios: unknown;
++      status_doc: string | null;
++      original_url: string | null;
++      signed_url: string | null;
++      enviado_em: Date | string | null;
+     }>(db, `
+       SELECT id, nome, motivo, motivo_interno, avaliacao, resumo, data_demissao, cargo, empresa, texto,
+-             assinatura, sign_url, zapsign_token
++             assinatura, sign_url, zapsign_token, signatarios, status_doc, original_url, signed_url, enviado_em
+       FROM dna_work.rescisao_documento
+       WHERE id_contratacao = $1
+       ORDER BY id
+     `, [idContratacao]);
+   }
+ 
+-  async gravarAssinatura(db: Db, idContratacao: number, assinatura: string, token: string, url: string | null): Promise<void> {
++  async gravarAssinatura(db: Db, idContratacao: number, values: {
++    assinatura: string;
++    token: string | null;
++    url: string | null;
++    signatarios: unknown;
++    statusDoc: string | null;
++    originalUrl: string | null;
++    signedUrl: string | null;
++    enviadoEm?: string | null;
++  }): Promise<void> {
+     await this.garantirRescisao(db);
+     await db.query(`
+       UPDATE dna_work.rescisao_documento
+-      SET assinatura = $2, zapsign_token = $3, sign_url = $4
++      SET assinatura = $2,
++          zapsign_token = $3,
++          sign_url = $4,
++          signatarios = $5::jsonb,
++          status_doc = $6,
++          original_url = $7,
++          signed_url = $8,
++          enviado_em = COALESCE($9::timestamp, enviado_em)
+       WHERE id_contratacao = $1
+-    `, [idContratacao, assinatura, token, url]);
++    `, [
++      idContratacao,
++      values.assinatura,
++      values.token,
++      values.url,
++      JSON.stringify(values.signatarios ?? null),
++      values.statusDoc,
++      values.originalUrl,
++      values.signedUrl,
++      values.enviadoEm ?? null,
++    ]);
+   }
+ 
+-  async marcarAssinaturaPorToken(db: Db, token: string, assinatura: string): Promise<boolean> {
++  async limparAssinatura(db: Db, idContratacao: number): Promise<void> {
++    await this.garantirRescisao(db);
++    await db.query(`
++      UPDATE dna_work.rescisao_documento
++      SET assinatura = 'Não assina digitalmente',
++          zapsign_token = NULL,
++          sign_url = NULL,
++          signatarios = NULL,
++          status_doc = NULL,
++          original_url = NULL,
++          signed_url = NULL,
++          enviado_em = NULL
++      WHERE id_contratacao = $1
++    `, [idContratacao]);
++  }
++
++  async lerAssinaturaPorToken(db: Db, token: string): Promise<{ signatarios: unknown; signed_url: string | null } | null> {
++    const existe = await one<{ ok: string | null }>(db, `SELECT to_regclass('dna_work.rescisao_documento')::text AS ok`);
++    if (!existe?.ok) return null;
++    return one(db, `
++      SELECT signatarios, signed_url
++      FROM dna_work.rescisao_documento
++      WHERE zapsign_token = $1
++    `, [token]);
++  }
++
++  async marcarAssinaturaPorToken(db: Db, token: string, values: {
++    assinatura: string;
++    statusDoc: string;
++    signedUrl: string | null;
++    signatarios: unknown;
++  }): Promise<boolean> {
+     const existe = await one<{ ok: string | null }>(db, `SELECT to_regclass('dna_work.rescisao_documento')::text AS ok`);
+     if (!existe?.ok) return false;
+     const result = await db.query(`
+-      UPDATE dna_work.rescisao_documento SET assinatura = $2 WHERE zapsign_token = $1
+-    `, [token, assinatura]);
++      UPDATE dna_work.rescisao_documento
++      SET assinatura = $2,
++          status_doc = $3,
++          signed_url = COALESCE($4, signed_url),
++          signatarios = COALESCE($5::jsonb, signatarios)
++      WHERE zapsign_token = $1
++    `, [token, values.assinatura, values.statusDoc, values.signedUrl, values.signatarios == null ? null : JSON.stringify(values.signatarios)]);
+     return (result.rowCount ?? 0) > 0;
+   }
+ 
+diff --git a/backend/src/routes/index.ts b/backend/src/routes/index.ts
+index b04a333..6affce0 100644
+--- a/backend/src/routes/index.ts
++++ b/backend/src/routes/index.ts
+@@ -7,7 +7,7 @@ import type { AppConfig } from "../config.js";
+ import { AppError } from "../lib/errors.js";
+ import { many, one } from "../repositories/sql.js";
+ import { candidatoCreateSchema, candidatoListSchema, candidatoPatchSchema } from "../schemas/candidato.js";
+-import { contratacaoCreateSchema, contratacaoEncerrarSchema, contratacaoListSchema } from "../schemas/contratacao.js";
++import { assinanteNovoSchema, assinanteTokenSchema, contratacaoCreateSchema, contratacaoEncerrarSchema, contratacaoListSchema } from "../schemas/contratacao.js";
+ import { empresaCreateSchema, empresaListSchema, empresaPatchSchema } from "../schemas/empresa.js";
+ import { pageSchema } from "../schemas/common.js";
+ import { processoCreateSchema, processoListSchema, processoMoverSchema } from "../schemas/processo.js";
+@@ -222,6 +222,35 @@ export async function registerRoutes(app: FastifyInstance, config: AppConfig, se
+   api.post("/api/v1/contratacoes/:id/assinatura", {
+     schema: { tags: ["contratacoes"], params: z.object({ id: z.coerce.number().int().positive() }) },
+   }, async (request) => ok(await services.contratacoes.solicitarAssinatura(request.params.id)));
++  api.get("/api/v1/contratacoes/:id/assinatura", {
++    schema: { tags: ["contratacoes"], params: z.object({ id: z.coerce.number().int().positive() }) },
++  }, async (request) => ok(await services.contratacoes.painelAssinatura(request.params.id)));
++  api.post("/api/v1/contratacoes/:id/assinatura/reenviar", {
++    schema: { tags: ["contratacoes"], params: z.object({ id: z.coerce.number().int().positive() }), body: assinanteTokenSchema },
++  }, async (request) => ok(await services.contratacoes.reenviarLink(request.params.id, request.body.token)));
++  api.post("/api/v1/contratacoes/:id/assinatura/email", {
++    schema: { tags: ["contratacoes"], params: z.object({ id: z.coerce.number().int().positive() }), body: assinanteTokenSchema },
++  }, async (request) => ok(await services.contratacoes.atualizarEmailAssinante(request.params.id, request.body.token)));
++  api.post("/api/v1/contratacoes/:id/assinatura/excluir-assinante", {
++    schema: { tags: ["contratacoes"], params: z.object({ id: z.coerce.number().int().positive() }), body: assinanteTokenSchema },
++  }, async (request) => ok(await services.contratacoes.excluirAssinante(request.params.id, request.body.token)));
++  api.post("/api/v1/contratacoes/:id/assinatura/assinante", {
++    schema: { tags: ["contratacoes"], params: z.object({ id: z.coerce.number().int().positive() }), body: assinanteNovoSchema },
++  }, async (request) => ok(await services.contratacoes.adicionarAssinante(request.params.id, request.body)));
++  api.delete("/api/v1/contratacoes/:id/assinatura", {
++    schema: { tags: ["contratacoes"], params: z.object({ id: z.coerce.number().int().positive() }) },
++  }, async (request) => ok(await services.contratacoes.excluirAssinatura(request.params.id)));
++  api.get("/api/v1/contratacoes/:id/assinatura/original", {
++    schema: {
++      tags: ["contratacoes"],
++      params: z.object({ id: z.coerce.number().int().positive() }),
++      querystring: z.object({ download: z.string().optional() }),
++    },
++  }, async (request, reply) => {
++    const pdf = await services.contratacoes.pdfRescisao(request.params.id);
++    const baixar = request.query.download === "1";
++    return reply.type("application/pdf").header("Content-Disposition", baixar ? "attachment; filename=\"rescisao.pdf\"" : "inline").send(pdf);
++  });
+ 
+   api.get("/api/v1/processos", { schema: { tags: ["processos"], querystring: processoListSchema } }, async (request) => {
+     const result = await services.processos.list(request.query);
+diff --git a/backend/src/schemas/contratacao.ts b/backend/src/schemas/contratacao.ts
+index fa68d84..ad56f8a 100644
+--- a/backend/src/schemas/contratacao.ts
++++ b/backend/src/schemas/contratacao.ts
+@@ -30,6 +30,16 @@ export const contratacaoListSchema = z.object({
+   inicio_ate: isoDateSchema.optional(),
+ });
+ 
++export const assinanteTokenSchema = z.object({
++  token: z.string().trim().min(1).max(120),
++});
++
++export const assinanteNovoSchema = z.object({
++  nome: z.string().trim().min(1).max(200),
++  email: z.string().trim().email().max(200),
++  parte: z.string().trim().min(1).max(80),
++});
++
+ export type ContratacaoCreate = z.infer<typeof contratacaoCreateSchema>;
+ export type ContratacaoEncerrar = z.infer<typeof contratacaoEncerrarSchema>;
+ export type ContratacaoListQuery = z.infer<typeof contratacaoListSchema>;
+diff --git a/backend/src/services/contratacao.service.ts b/backend/src/services/contratacao.service.ts
+index 5d60bff..e543b6e 100644
+--- a/backend/src/services/contratacao.service.ts
++++ b/backend/src/services/contratacao.service.ts
+@@ -11,7 +11,29 @@ import { one } from "../repositories/sql.js";
+ import { VagaRepository } from "../repositories/vaga.repository.js";
+ import type { ContratacaoCreate, ContratacaoEncerrar, ContratacaoListQuery } from "../schemas/contratacao.js";
+ import { buildTermoPdf } from "../lib/termo-pdf.js";
+-import { criarDocumentoZapSign } from "../lib/zapsign.js";
++import {
++  adicionarAssinanteZapSign,
++  atualizarAssinanteZapSign,
++  buscarDocumentoZapSign,
++  criarDocumentoZapSign,
++  excluirDocumentoZapSign,
++  reenviarAssinanteZapSign,
++  removerAssinanteZapSign,
++} from "../lib/zapsign.js";
++import { enviarEmailMailjet } from "../lib/mailjet.js";
++import {
++  agoraSp,
++  apresentarPainel,
++  aplicarRetornoZap,
++  hojeSp,
++  mesclarRemotos,
++  montarPartes,
++  normalizarPartes,
++  rotuloColuna,
++  type FlagsEscola,
++  type FlagsPapel,
++  type ParteAssinatura,
++} from "../lib/assinatura-rescisao.js";
+ import { presentContratacao, vagaSituacao } from "./presenters.js";
+ import type { ProcessoService } from "./processo.service.js";
+ 
+@@ -197,9 +219,10 @@ export class ContratacaoService {
+       empresa: item.empresa,
+       data: item.data_demissao,
+       devolvido_por: "—",
+-      assinatura: item.assinatura || "Não assina digitalmente",
++      assinatura: rotuloColuna(item.status_doc, Boolean(item.zapsign_token)),
+       sign_url: item.sign_url,
+       pode_assinar: !item.zapsign_token,
++      painel: true,
+       status: "Demitido",
+       motivo: item.motivo,
+       motivo_interno: item.motivo_interno,
+@@ -210,7 +233,7 @@ export class ContratacaoService {
+     const historicos = await this.repo.listarContratosGerados(this.db, row.id_candidato, row.id_vaga);
+     return [
+       ...gerados,
+-      ...historicos.map((item) => ({ ...item, sign_url: null, pode_assinar: false })),
++      ...historicos.map((item) => ({ ...item, sign_url: null, pode_assinar: false, painel: false })),
+     ];
+   }
+ 
+@@ -221,21 +244,11 @@ export class ContratacaoService {
+     const docs = await this.repo.listarRescisoes(this.db, id);
+     const doc = docs[0];
+     if (!doc) throw new AppError(404, "RESCISAO_NAO_ENCONTRADA", "Gere a rescisão antes de pedir a assinatura.");
+-    if (doc.zapsign_token) {
+-      return { assinatura: doc.assinatura || "Aguardando", sign_url: doc.sign_url };
+-    }
+-    const partes = await one<{ candidato_nome: string | null; candidato_email: string | null; empresa_nome: string | null; empresa_email: string | null }>(this.db, `
+-      SELECT c.nome AS candidato_nome, c.email AS candidato_email,
+-             coalesce(e.nome_fantasia, e.razao_social) AS empresa_nome, e.email AS empresa_email
+-      FROM dna_work.conratacaovaga cv
+-      LEFT JOIN dna_work.candidato c ON c.id_candidato = cv.id_candidato
+-      LEFT JOIN dna_work.empresa e ON e.id_empresa = cv.id_empresa
+-      WHERE cv.id_contratacao = $1
+-    `, [id]);
+-    const signers = [
+-      partes?.candidato_email ? { name: partes.candidato_nome || "Candidato", email: partes.candidato_email.trim(), external_id: row.id_candidato ?? undefined } : null,
+-      partes?.empresa_email ? { name: partes.empresa_nome || "Empresa", email: partes.empresa_email.trim(), external_id: row.id_empresa ?? undefined } : null,
+-    ].filter((item): item is { name: string; email: string; external_id: string | undefined } => Boolean(item?.email));
++    if (doc.zapsign_token) return this.painelAssinatura(id);
++    const partes = await this.partesDaRescisao(row);
++    const signers = partes
++      .filter((item) => item.email)
++      .map((item) => ({ name: item.nome, email: item.email, external_id: item.tipo }));
+     if (!signers.length) {
+       throw new AppError(422, "EMAIL_AUSENTE", "Candidato ou empresa precisam ter e-mail para a assinatura digital.");
+     }
+@@ -250,18 +263,326 @@ export class ContratacaoService {
+       pdf,
+       signers,
+     });
+-    const url = enviado.signers?.find((item) => item.sign_url)?.sign_url ?? null;
+-    await this.repo.gravarAssinatura(this.db, id, "Aguardando", enviado.token ?? "", url);
+-    return { assinatura: "Aguardando", sign_url: url };
++    const gravadas = aplicarRetornoZap(partes, enviado.signers);
++    const url = gravadas.find((item) => item.url)?.url ?? null;
++    await this.repo.gravarAssinatura(this.db, id, {
++      assinatura: "Aguardando",
++      token: enviado.token ?? "",
++      url,
++      signatarios: gravadas,
++      statusDoc: "pending",
++      originalUrl: enviado.original_file ?? null,
++      signedUrl: enviado.signed_file ?? null,
++      enviadoEm: agoraSp(),
++    });
++    const painel = await this.painelAssinatura(id);
++    return { assinatura: "Aguardando", sign_url: url, ...painel };
++  }
++
++  async painelAssinatura(id: number) {
++    this.ensureReady();
++    const row = await this.repo.findById(this.db, id);
++    if (!row) throw new AppError(404, "CONTRATACAO_NAO_ENCONTRADA", "Contratação não encontrada.");
++    const docs = await this.repo.listarRescisoes(this.db, id);
++    const doc = docs[0];
++    if (!doc) throw new AppError(404, "RESCISAO_NAO_ENCONTRADA", "Gere a rescisão antes de acompanhar a assinatura.");
++    let signatarios = normalizarPartes(doc.signatarios);
++    let statusDoc = doc.status_doc;
++    let signedUrl = doc.signed_url;
++    if (doc.zapsign_token && this.config.ZAPSIGN_API_TOKEN) {
++      try {
++        const remoto = await buscarDocumentoZapSign(this.config.ZAPSIGN_API_URL, this.config.ZAPSIGN_API_TOKEN, doc.zapsign_token);
++        signatarios = mesclarRemotos(signatarios, remoto.signers ?? []);
++        statusDoc = remoto.status || statusDoc;
++        signedUrl = remoto.signed_file ?? signedUrl;
++        await this.repo.gravarAssinatura(this.db, id, {
++          assinatura: rotuloColuna(statusDoc, true),
++          token: doc.zapsign_token,
++          url: doc.sign_url,
++          signatarios,
++          statusDoc: statusDoc ?? "pending",
++          originalUrl: remoto.original_file ?? doc.original_url,
++          signedUrl,
++        });
++      } catch {
++        // O painel continua com o que já foi gravado se a ZapSign não responder.
++      }
++    }
++    return apresentarPainel({
++      nome: doc.nome,
++      statusDoc,
++      enviadoEm: doc.enviado_em,
++      originalUrl: doc.original_url,
++      signedUrl,
++      signatarios,
++      candidatoId: row.id_candidato,
++      empresaId: row.id_empresa,
++    });
++  }
++
++  async reenviarLink(id: number, token: string) {
++    const painelAtual = await this.painelAssinatura(id);
++    const signer = painelAtual.signatarios.find((item) => item.token === token);
++    if (!signer?.url || !signer.email) throw new AppError(404, "ASSINANTE_NAO_ENCONTRADO", "Esse assinante não tem link para reenviar.");
++    const doc = (await this.repo.listarRescisoes(this.db, id))[0];
++    let enviou = false;
++    if (doc?.zapsign_token && this.config.ZAPSIGN_API_TOKEN) {
++      try {
++        await reenviarAssinanteZapSign(this.config.ZAPSIGN_API_URL, this.config.ZAPSIGN_API_TOKEN, token);
++        enviou = true;
++      } catch {
++        enviou = false;
++      }
++    }
++    if (this.config.MAILJET_API_KEY && this.config.MAILJET_SECRET_KEY) {
++      await enviarEmailMailjet({
++        apiKey: this.config.MAILJET_API_KEY,
++        secret: this.config.MAILJET_SECRET_KEY,
++        fromEmail: this.config.MAILJET_FROM,
++        fromName: this.config.MAILJET_FROM_NAME,
++        to: [{ email: signer.email, nome: signer.nome }],
++        subject: `Assinatura digital — ${painelAtual.nome}`,
++        html: `<p>Olá ${signer.nome},</p><p>Segue o link para assinar ${painelAtual.nome}:</p><p><a href="${signer.url}">${signer.url}</a></p>`,
++      });
++      enviou = true;
++    }
++    if (!enviou) {
++      throw new AppError(502, "LINK_NAO_REENVIADO", "Não foi possível reenviar agora. Copie o link e envie para o assinante.");
++    }
++    return { enviado: true, url: signer.url };
++  }
++
++  async atualizarEmailAssinante(id: number, token: string) {
++    const row = await this.repo.findById(this.db, id);
++    if (!row) throw new AppError(404, "CONTRATACAO_NAO_ENCONTRADA", "Contratação não encontrada.");
++    const doc = (await this.repo.listarRescisoes(this.db, id))[0];
++    if (!doc?.zapsign_token) throw new AppError(404, "ASSINATURA_NAO_ENVIADA", "Envie o documento para assinatura antes de atualizar o e-mail.");
++    const atuais = normalizarPartes(doc.signatarios);
++    const alvo = atuais.find((item) => item.token === token);
++    if (!alvo) throw new AppError(404, "ASSINANTE_NAO_ENCONTRADO", "Assinante não encontrado.");
++    const frescos = await this.partesDaRescisao(row);
++    const novo = frescos.find((item) => item.tipo === alvo.tipo);
++    const email = (novo?.email || alvo.email).trim().toLowerCase();
++    const nome = novo?.nome || alvo.nome;
++    if (!email) throw new AppError(422, "EMAIL_AUSENTE", "O cadastro dessa parte está sem e-mail.");
++    if (this.config.ZAPSIGN_API_TOKEN) {
++      const remoto = await atualizarAssinanteZapSign(this.config.ZAPSIGN_API_URL, this.config.ZAPSIGN_API_TOKEN, token, { name: nome, email });
++      alvo.email = email;
++      alvo.nome = nome;
++      alvo.url = remoto.sign_url || alvo.url;
++      alvo.token = remoto.token || alvo.token;
++    } else {
++      alvo.email = email;
++      alvo.nome = nome;
++    }
++    await this.repo.gravarAssinatura(this.db, id, {
++      assinatura: doc.assinatura || "Aguardando",
++      token: doc.zapsign_token,
++      url: doc.sign_url,
++      signatarios: atuais,
++      statusDoc: doc.status_doc,
++      originalUrl: doc.original_url,
++      signedUrl: doc.signed_url,
++    });
++    return this.painelAssinatura(id);
++  }
++
++  async excluirAssinante(id: number, token: string) {
++    const doc = (await this.repo.listarRescisoes(this.db, id))[0];
++    if (!doc) throw new AppError(404, "RESCISAO_NAO_ENCONTRADA", "Rescisão não encontrada.");
++    const atuais = normalizarPartes(doc.signatarios).filter((item) => item.token !== token);
++    if (atuais.length === normalizarPartes(doc.signatarios).length) {
++      throw new AppError(404, "ASSINANTE_NAO_ENCONTRADO", "Assinante não encontrado.");
++    }
++    if (this.config.ZAPSIGN_API_TOKEN) await removerAssinanteZapSign(this.config.ZAPSIGN_API_URL, this.config.ZAPSIGN_API_TOKEN, token);
++    await this.repo.gravarAssinatura(this.db, id, {
++      assinatura: doc.assinatura || "Aguardando",
++      token: doc.zapsign_token,
++      url: doc.sign_url,
++      signatarios: atuais,
++      statusDoc: doc.status_doc,
++      originalUrl: doc.original_url,
++      signedUrl: doc.signed_url,
++    });
++    return this.painelAssinatura(id);
++  }
++
++  async adicionarAssinante(id: number, input: { nome: string; email: string; parte: string }) {
++    const doc = (await this.repo.listarRescisoes(this.db, id))[0];
++    if (!doc?.zapsign_token) throw new AppError(404, "ASSINATURA_NAO_ENVIADA", "Envie o documento para assinatura antes de adicionar um assinante.");
++    if (!this.config.ZAPSIGN_API_TOKEN) {
++      throw new AppError(503, "ZAPSIGN_NAO_CONFIGURADA", "Defina ZAPSIGN_API_TOKEN no ambiente antes de adicionar um assinante.");
++    }
++    const remoto = await adicionarAssinanteZapSign(this.config.ZAPSIGN_API_URL, this.config.ZAPSIGN_API_TOKEN, doc.zapsign_token, {
++      name: input.nome,
++      email: input.email.trim().toLowerCase(),
++    });
++    const atuais = normalizarPartes(doc.signatarios);
++    const agente = atuais.findIndex((item) => item.tipo === "agente");
++    const novo: ParteAssinatura = {
++      parte: input.parte,
++      tipo: "extra",
++      nome: input.nome,
++      email: input.email.trim().toLowerCase(),
++      status: remoto.status || "new",
++      data: null,
++      token: remoto.token ?? null,
++      url: remoto.sign_url ?? null,
++    };
++    if (agente >= 0) atuais.splice(agente, 0, novo);
++    else atuais.push(novo);
++    await this.repo.gravarAssinatura(this.db, id, {
++      assinatura: doc.assinatura || "Aguardando",
++      token: doc.zapsign_token,
++      url: doc.sign_url,
++      signatarios: atuais,
++      statusDoc: doc.status_doc,
++      originalUrl: doc.original_url,
++      signedUrl: doc.signed_url,
++    });
++    return this.painelAssinatura(id);
++  }
++
++  async excluirAssinatura(id: number) {
++    const doc = (await this.repo.listarRescisoes(this.db, id))[0];
++    if (!doc) throw new AppError(404, "RESCISAO_NAO_ENCONTRADA", "Rescisão não encontrada.");
++    if (doc.zapsign_token && this.config.ZAPSIGN_API_TOKEN) {
++      await excluirDocumentoZapSign(this.config.ZAPSIGN_API_URL, this.config.ZAPSIGN_API_TOKEN, doc.zapsign_token);
++    }
++    await this.repo.limparAssinatura(this.db, id);
++    return { excluida: true };
++  }
++
++  async pdfRescisao(id: number): Promise<Buffer> {
++    const doc = (await this.repo.listarRescisoes(this.db, id))[0];
++    if (!doc) throw new AppError(404, "RESCISAO_NAO_ENCONTRADA", "Rescisão não encontrada.");
++    return buildTermoPdf((doc.texto || doc.nome).split("\n"));
+   }
+ 
+   async receberAssinatura(payload: Record<string, unknown>): Promise<boolean> {
+     const token = String(payload.token ?? "");
+-    const status = `${payload.event_type ?? ""} ${payload.status ?? ""}`.toLowerCase();
++    const documento = String(payload.status ?? "").toLowerCase();
++    const evento = String(payload.event_type ?? "").toLowerCase();
+     if (!token) return false;
+-    const assinatura = status.includes("refus") ? "Recusado" : status.includes("signed") ? "Assinado" : "";
+-    if (!assinatura) return false;
+-    return this.repo.marcarAssinaturaPorToken(this.db, token, assinatura);
++    const recusado = documento.includes("refus") || evento.includes("refus");
++    const documentoAssinado = documento === "signed";
++    const remotos = Array.isArray(payload.signers) ? payload.signers as Array<{ token?: string; email?: string; status?: string; sign_url?: string; signed_at?: string | null }> : [];
++    if (!recusado && !documentoAssinado && remotos.length === 0) return false;
++    const atual = await this.repo.lerAssinaturaPorToken(this.db, token);
++    if (!atual) return false;
++    const signatarios = remotos.length ? mesclarRemotos(normalizarPartes(atual.signatarios), remotos) : null;
++    const statusDoc = recusado ? "refused" : documentoAssinado ? "signed" : "pending";
++    return this.repo.marcarAssinaturaPorToken(this.db, token, {
++      assinatura: rotuloColuna(statusDoc, true),
++      statusDoc,
++      signedUrl: typeof payload.signed_file === "string" ? payload.signed_file : null,
++      signatarios,
++    });
++  }
++
++  private async partesDaRescisao(row: { id_contratacao: number; id_candidato: string | null; id_empresa: string | null; tipo_vaga: number | null; modalidade: string | null; id_supervisor: number | null }): Promise<ParteAssinatura[]> {
++    const estagio = row.tipo_vaga === 1 || classifyRegime(row.modalidade) === "estagio";
++    const tipoPapel = estagio ? "TCE" : "Convenio";
++    const base = await one<{
++      candidato_nome: string | null;
++      candidato_email: string | null;
++      nascimento: string | null;
++      nome_responsavel: string | null;
++      email_responsavel: string | null;
++      escola: string | null;
++      empresa_email: string | null;
++      responsavel: string | null;
++      nome_administrativo: string | null;
++      email_administrativo: string | null;
++      nome_rh: string | null;
++      email_rh: string | null;
++      nome_financeiro: string | null;
++      email_financeiro: string | null;
++      sede: string | number | null;
++    }>(this.db, `
++      SELECT c.nome AS candidato_nome, c.email AS candidato_email, c.datanascimento AS nascimento,
++             c.nome_responsavel, c.email_responsavel, c.escola,
++             e.email AS empresa_email, e.responsavel, e.nome_administrativo, e.email_administrativo,
++             e.nome_rh, e.email_rh, e.nome_financeiro, e.email_financeiro, e.sede
++      FROM dna_work.conratacaovaga cv
++      LEFT JOIN dna_work.candidato c ON c.id_candidato = cv.id_candidato
++      LEFT JOIN dna_work.empresa e ON e.id_empresa = cv.id_empresa
++      WHERE cv.id_contratacao = $1
++    `, [row.id_contratacao]);
++    const flags = row.id_empresa
++      ? await one<FlagsPapel>(this.db, `
++          SELECT responsavel, administrativo, rh, financeiro, supervisor
++          FROM dna_work.assinaturas_empresa
++          WHERE id_empresa = $1 AND tipo = $2
++        `, [row.id_empresa, tipoPapel])
++      : null;
++    const escolaId = base?.escola ?? null;
++    const escola = estagio && escolaId
++      ? await one<{
++          responsavel: string | null;
++          responsavel_email: string | null;
++          representante_legal: string | null;
++          representante_legal_email: string | null;
++        }>(this.db, `
++          SELECT responsavel, responsavel_email, representante_legal, representante_legal_email
++          FROM dna_work.instituicao
++          WHERE id_instiduicao::text = $1
++        `, [escolaId])
++      : null;
++    const flagsEscola = estagio && escolaId
++      ? await one<FlagsEscola>(this.db, `
++          SELECT diretor, representante, supervisor
++          FROM dna_work.assinaturas_instituicao
++          WHERE id_instituicao::text = $1 AND tipo = $2
++        `, [escolaId, tipoPapel])
++      : null;
++    const supervisor = flags && Number(flags.supervisor) === 1
++      ? await one<{ nome: string | null; email: string | null }>(this.db, `
++          SELECT nome, email
++          FROM dna_work.supervisor_estagio
++          WHERE ($1::int IS NOT NULL AND id = $1) OR ($1::int IS NULL AND id_empresa = $2 AND status::text = '1')
++          ORDER BY id
++          LIMIT 1
++        `, [row.id_supervisor, row.id_empresa])
++      : null;
++    const agente = await one<{ nome_fantasia: string | null }>(this.db, `
++      SELECT nome_fantasia
++      FROM dna_work.agente_integracao
++      WHERE sede::text = $1 OR id_agente::text = $1
++      LIMIT 1
++    `, [String(base?.sede ?? "")]);
++    return montarPartes({
++      estagio,
++      hoje: hojeSp(),
++      agora: agoraSp(),
++      candidato: {
++        nome: base?.candidato_nome ?? "",
++        email: base?.candidato_email ?? "",
++        nascimento: base?.nascimento ?? null,
++        nomeResponsavel: base?.nome_responsavel ?? "",
++        emailResponsavel: base?.email_responsavel ?? "",
++      },
++      empresa: {
++        email: base?.empresa_email ?? "",
++        responsavel: base?.responsavel ?? "",
++        nomeAdministrativo: base?.nome_administrativo ?? "",
++        emailAdministrativo: base?.email_administrativo ?? "",
++        nomeRh: base?.nome_rh ?? "",
++        emailRh: base?.email_rh ?? "",
++        nomeFinanceiro: base?.nome_financeiro ?? "",
++        emailFinanceiro: base?.email_financeiro ?? "",
++        flags,
++      },
++      supervisor: supervisor?.email ? { nome: supervisor.nome ?? "Supervisor", email: supervisor.email } : null,
++      escola: escola ? {
++        responsavel: escola.responsavel ?? "",
++        responsavelEmail: escola.responsavel_email ?? "",
++        representante: escola.representante_legal ?? "",
++        representanteEmail: escola.representante_legal_email ?? "",
++        flags: flagsEscola,
++      } : null,
++      agenteNome: agente?.nome_fantasia || "DNA Work",
++    });
+   }
+ 
+   async encerrar(id: number, input: ContratacaoEncerrar) {
+diff --git a/backend/test/assinatura-rescisao.test.ts b/backend/test/assinatura-rescisao.test.ts
+new file mode 100644
+index 0000000..cdbd4bc
+--- /dev/null
++++ b/backend/test/assinatura-rescisao.test.ts
+@@ -0,0 +1,93 @@
++import assert from "node:assert/strict";
++import test from "node:test";
++import { apresentarPainel, linkVerificar, menorDeIdade, montarPartes, rotuloColuna, rotuloDocumento, type ContextoAssinatura } from "../src/lib/assinatura-rescisao.js";
++
++const mirella: ContextoAssinatura = {
++  estagio: true,
++  hoje: "2026-10-28",
++  agora: "2026-10-28T18:13:14",
++  candidato: {
++    nome: "Mirella Azevedo Santiago",
++    email: "mirellaazevedosantiagoazevedo@gmail.com",
++    nascimento: "2008/08/12",
++    nomeResponsavel: "",
++    emailResponsavel: "Luciana.silva.Azevedo.lu@gmail.com",
++  },
++  empresa: {
++    email: "cacaushow.anhanguera@uol.com.br",
++    responsavel: "Donata Merlugo Campos",
++    nomeAdministrativo: "Donata Merlugo Campos",
++    emailAdministrativo: "cacaushow.anhanguera@uol.com.br",
++    nomeRh: "Donata Merlugo Campos",
++    emailRh: "cacaushow.anhanguera@uol.com.br",
++    nomeFinanceiro: "Donata Merlugo Campos",
++    emailFinanceiro: "cacaushow.anhanguera@uol.com.br",
++    flags: { responsavel: 1, administrativo: 0, rh: 0, financeiro: 0, supervisor: 0 },
++  },
++  supervisor: { nome: "Supervisor", email: "supervisor@empresa.com" },
++  escola: {
++    responsavel: "Marco Antonio Domingos Batista",
++    responsavelEmail: "e000188a@educacao.sp.gov.br",
++    representante: "Elizabeth Olivieri",
++    representanteEmail: "",
++    flags: { diretor: 1, representante: 0, supervisor: 0 },
++  },
++  agenteNome: "DNA Work",
++};
++
++test("rescisão de estágio maior de idade leva candidato, empresa, diretor e agente", () => {
++  const partes = montarPartes(mirella);
++  assert.deepEqual(partes.map((item) => item.parte), [
++    "Candidato",
++    "Empresa",
++    "Instituição de Ensino Diretor",
++    "Agente",
++  ]);
++  assert.equal(partes[1]?.nome, "Donata Merlugo Campos");
++  assert.equal(partes[1]?.email, "cacaushow.anhanguera@uol.com.br");
++  assert.equal(partes[3]?.status, "signed");
++  assert.equal(partes[3]?.email, "");
++  assert.equal(menorDeIdade(mirella.candidato.nascimento, mirella.hoje), false);
++});
++
++test("menor de idade e supervisor entram quando a empresa pede", () => {
++  const partes = montarPartes({
++    ...mirella,
++    candidato: { ...mirella.candidato, nascimento: "2010/05/01", nomeResponsavel: "Luciana Silva" },
++    empresa: { ...mirella.empresa, flags: { responsavel: 1, administrativo: 0, rh: 0, financeiro: 0, supervisor: 1 } },
++  });
++  assert.deepEqual(partes.map((item) => item.parte), [
++    "Candidato",
++    "Responsável pelo Candidato",
++    "Empresa",
++    "Empresa Supervisor de Estágio",
++    "Instituição de Ensino Diretor",
++    "Agente",
++  ]);
++});
++
++test("link de envio usa o token da ZapSign e o painel esconde o do agente assinado", () => {
++  assert.equal(linkVerificar("5459a1a5-9c36-4870-9cf1-26839478c0fc", null), "https://app.zapsign.com.br/verificar/5459a1a5-9c36-4870-9cf1-26839478c0fc");
++  const painel = apresentarPainel({
++    nome: "Rescisão de estágio",
++    statusDoc: "pending",
++    enviadoEm: "2026-10-28",
++    originalUrl: null,
++    signedUrl: null,
++    candidatoId: "cand",
++    empresaId: "emp",
++    signatarios: [
++      { parte: "Candidato", tipo: "candidato", nome: "Mirella", email: "a@a.com", status: "new", data: null, token: "abc", url: null },
++      { parte: "Agente", tipo: "agente", nome: "DNA Work", email: "", status: "signed", data: "2026-10-28T18:13:14", token: null, url: null },
++    ],
++  });
++  assert.equal(painel.status, "Pendente");
++  assert.equal(painel.enviado_em, "28/10/2026");
++  assert.equal(painel.signatarios[0]?.url, "https://app.zapsign.com.br/verificar/abc");
++  assert.equal(painel.signatarios[0]?.editar, "/candidatos/cand");
++  assert.equal(painel.signatarios[1]?.url, null);
++  assert.equal(painel.signatarios[1]?.baixar, true);
++  assert.equal(painel.signatarios[1]?.data, "28/10/2026 18:13:14");
++  assert.equal(rotuloColuna("pending", true), "Aguardando");
++  assert.equal(rotuloDocumento(null, false), "Não enviado");
++});
+diff --git a/frontend/src/components/documentos-contratacao.tsx b/frontend/src/components/documentos-contratacao.tsx
+index 91f155f..d01516a 100644
+--- a/frontend/src/components/documentos-contratacao.tsx
++++ b/frontend/src/components/documentos-contratacao.tsx
+@@ -1,5 +1,7 @@
+ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+ import { Fragment, useState } from "react";
++import { useNavigate } from "react-router-dom";
++import { ConfirmacaoAssinatura, PainelAssinatura } from "@/components/painel-assinatura";
+ import { Button, Card, Skeleton } from "@/components/ui";
+ import { ApiError, api } from "@/lib/api";
+ import { dateBr } from "@/lib/format";
+@@ -14,6 +16,7 @@ export type DocumentoGerado = {
+   assinatura: string | null;
+   sign_url: string | null;
+   pode_assinar: boolean;
++  painel?: boolean;
+   status: string;
+   motivo: string;
+   motivo_interno: string | null;
+@@ -23,7 +26,11 @@ export type DocumentoGerado = {
+ };
+ 
+ export function DocumentosContratacao({ id }: { id: string }) {
++  const navigate = useNavigate();
+   const [aberto, setAberto] = useState<number | null>(null);
++  const [painel, setPainel] = useState(false);
++  const [confirmar, setConfirmar] = useState(false);
++  const [enviado, setEnviado] = useState(false);
+   const [erro, setErro] = useState("");
+   const client = useQueryClient();
+   const query = useQuery({
+@@ -34,7 +41,9 @@ export function DocumentosContratacao({ id }: { id: string }) {
+     mutationFn: () => api<{ assinatura: string; sign_url: string | null }>(`/api/v1/contratacoes/${id}/assinatura`, { method: "POST" }),
+     onSuccess: async () => {
+       setErro("");
++      setEnviado(true);
+       await client.invalidateQueries({ queryKey: ["contratacao-documentos", id] });
++      await client.invalidateQueries({ queryKey: ["contratacao-assinatura", id] });
+     },
+     onError: (error) => setErro(error instanceof ApiError ? error.message : "A ZapSign não enviou a assinatura."),
+   });
+@@ -69,7 +78,14 @@ export function DocumentosContratacao({ id }: { id: string }) {
+                 <Fragment key={`${item.status}-${item.id}`}>
+                   <tr className="border-b border-slate-100">
+                     <td className="px-3 py-3 font-semibold">
+-                      <button type="button" className="text-left text-cyan-800" onClick={() => setAberto(aberto === item.id ? null : item.id)}>
++                      <button
++                        type="button"
++                        className="text-left text-cyan-800"
++                        onClick={() => {
++                          if (item.painel) setPainel(true);
++                          else setAberto(aberto === item.id ? null : item.id);
++                        }}
++                      >
+                         {item.nome}
+                       </button>
+                     </td>
+@@ -80,12 +96,14 @@ export function DocumentosContratacao({ id }: { id: string }) {
+                     <td>
+                       <div className="grid gap-1">
+                         <span>{item.assinatura || "—"}</span>
+-                        {item.pode_assinar ? (
+-                          <Button className="h-8 bg-orange-500 px-2 text-navy-950 hover:bg-orange-400" disabled={assinar.isPending} onClick={() => assinar.mutate()}>
+-                            {assinar.isPending ? "Enviando…" : "Obter assinatura digital"}
++                        {item.pode_assinar && item.painel ? (
++                          <Button className="h-8 bg-orange-500 px-2 text-navy-950 hover:bg-orange-400" onClick={() => { setErro(""); setEnviado(false); setConfirmar(true); }}>
++                            Obter assinatura digital
+                           </Button>
+                         ) : null}
+-                        {item.sign_url ? <a className="font-semibold text-cyan-800" href={item.sign_url} target="_blank" rel="noreferrer">Abrir assinatura</a> : null}
++                        {item.painel && !item.pode_assinar ? (
++                          <button type="button" className="text-left font-semibold text-cyan-800" onClick={() => setPainel(true)}>Abrir assinatura</button>
++                        ) : null}
+                       </div>
+                     </td>
+                     <td>{item.status}</td>
+@@ -103,7 +121,20 @@ export function DocumentosContratacao({ id }: { id: string }) {
+           </table>
+         </div>
+       ) : null}
+-      {erro ? <p className="mt-3 text-sm text-rose-600">{erro}</p> : null}
++      {erro && !confirmar ? <p className="mt-3 text-sm text-rose-600">{erro}</p> : null}
++      {painel ? (
++        <PainelAssinatura id={id} onClose={() => setPainel(false)} />
++      ) : null}
++      {confirmar ? (
++        <ConfirmacaoAssinatura
++          enviando={assinar.isPending}
++          enviado={enviado}
++          erro={erro}
++          onSim={() => assinar.mutate()}
++          onNao={() => setConfirmar(false)}
++          onVerDocumento={() => { setConfirmar(false); navigate(`/contratacoes/${id}`); }}
++        />
++      ) : null}
+     </Card>
+   );
+ }
+diff --git a/frontend/src/components/painel-assinatura.tsx b/frontend/src/components/painel-assinatura.tsx
+new file mode 100644
+index 0000000..5fef3f6
+--- /dev/null
++++ b/frontend/src/components/painel-assinatura.tsx
+@@ -0,0 +1,287 @@
++import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
++import { useState, type CSSProperties } from "react";
++import { Link } from "react-router-dom";
++import { ApiError, api } from "@/lib/api";
++
++export type SignatarioPainel = {
++  parte: string;
++  tipo: string;
++  nome: string;
++  email: string;
++  status: string;
++  data: string | null;
++  token: string | null;
++  url: string | null;
++  editar: string | null;
++  baixar: boolean;
++};
++
++export type PainelAssinaturaDados = {
++  nome: string;
++  status: string;
++  enviado_em: string | null;
++  original_url: string | null;
++  preview_url: string | null;
++  signatarios: SignatarioPainel[];
++};
++
++const card: CSSProperties = {
++  background: "#ffffff",
++  color: "#1e293b",
++  borderRadius: 18,
++  boxShadow: "0 24px 60px rgba(15, 23, 42, 0.22)",
++};
++
++const partes = [
++  "Candidato",
++  "Empresa",
++  "Instituição de Ensino Diretor",
++  "Responsável pelo Candidato",
++  "Empresa Supervisor de Estágio",
++];
++
++function Botao({
++  children,
++  onClick,
++  tom,
++  disabled,
++  type = "button",
++}: {
++  children: string;
++  onClick?: () => void;
++  tom: "laranja" | "verde" | "claro";
++  disabled?: boolean;
++  type?: "button" | "submit";
++}) {
++  const cores = {
++    laranja: { background: "#f97316", color: "#ffffff", border: "1px solid #f97316" },
++    verde: { background: "#0f766e", color: "#ffffff", border: "1px solid #0f766e" },
++    claro: { background: "#ffffff", color: "#334155", border: "1px solid #cbd5e1" },
++  }[tom];
++  return (
++    <button
++      type={type}
++      disabled={disabled}
++      onClick={onClick}
++      style={{ ...cores, borderRadius: 8, padding: "7px 12px", fontWeight: 700, fontSize: 13, cursor: disabled ? "wait" : "pointer", opacity: disabled ? 0.6 : 1 }}
++    >
++      {children}
++    </button>
++  );
++}
++
++export function ConfirmacaoAssinatura({
++  enviando,
++  enviado,
++  erro,
++  onSim,
++  onNao,
++  onVerDocumento,
++}: {
++  enviando: boolean;
++  enviado: boolean;
++  erro: string;
++  onSim: () => void;
++  onNao: () => void;
++  onVerDocumento: () => void;
++}) {
++  return (
++    <div className="fixed inset-0 z-50 grid place-items-center p-4" style={{ background: "rgba(148, 163, 184, 0.45)" }} role="dialog" aria-modal="true" aria-labelledby="assinatura-titulo">
++      <div style={{ ...card, width: "min(440px, 100%)", padding: "28px 28px 22px" }}>
++        <h2 id="assinatura-titulo" style={{ margin: 0, fontSize: 28, fontWeight: 800, color: "#1e1b4b" }}>Assinatura digital</h2>
++        {enviado ? (
++          <div style={{ marginTop: 18, display: "grid", gap: 8 }}>
++            <p style={{ margin: 0, fontSize: 18, color: "#334155" }}>Documento enviado para assinatura.</p>
++            <p style={{ margin: 0, fontSize: 18, color: "#334155" }}>Envelope enviado.</p>
++          </div>
++        ) : (
++          <p style={{ margin: "18px 0 0", fontSize: 18, color: "#334155" }}>Enviar este documento para assinatura digital?</p>
++        )}
++        {erro ? <p style={{ margin: "12px 0 0", color: "#be123c", fontSize: 14 }}>{erro}</p> : null}
++        {enviado ? null : (
++          <div style={{ display: "flex", gap: 10, marginTop: 22 }}>
++            <Botao tom="laranja" disabled={enviando} onClick={onSim}>{enviando ? "Enviando…" : "Sim"}</Botao>
++            <Botao tom="claro" disabled={enviando} onClick={onNao}>Não</Botao>
++          </div>
++        )}
++        <button type="button" onClick={onVerDocumento} style={{ marginTop: 18, padding: 0, border: 0, background: "transparent", color: "#f97316", fontWeight: 700, cursor: "pointer" }}>
++          Ver documento
++        </button>
++      </div>
++    </div>
++  );
++}
++
++export function PainelAssinatura({ id, onClose }: { id: string; onClose: () => void }) {
++  const client = useQueryClient();
++  const [copiado, setCopiado] = useState("");
++  const [erro, setErro] = useState("");
++  const [aviso, setAviso] = useState("");
++  const [incluindo, setIncluindo] = useState(false);
++  const [nome, setNome] = useState("");
++  const [email, setEmail] = useState("");
++  const [parte, setParte] = useState(partes[0]);
++  const [confirmarExclusao, setConfirmarExclusao] = useState(false);
++  const query = useQuery({
++    queryKey: ["contratacao-assinatura", id],
++    queryFn: () => api<PainelAssinaturaDados>(`/api/v1/contratacoes/${id}/assinatura`),
++  });
++  const atualizar = async () => {
++    await client.invalidateQueries({ queryKey: ["contratacao-assinatura", id] });
++    await client.invalidateQueries({ queryKey: ["contratacao-documentos", id] });
++  };
++  const falha = (error: unknown, fallback: string) => setErro(error instanceof ApiError ? error.message : fallback);
++  const reenviar = useMutation({
++    mutationFn: (token: string) => api(`/api/v1/contratacoes/${id}/assinatura/reenviar`, { method: "POST", body: JSON.stringify({ token }) }),
++    onSuccess: async () => { setErro(""); setAviso("Link reenviado."); await atualizar(); },
++    onError: (error) => falha(error, "Não foi possível reenviar o link."),
++  });
++  const emailAssinante = useMutation({
++    mutationFn: (token: string) => api(`/api/v1/contratacoes/${id}/assinatura/email`, { method: "POST", body: JSON.stringify({ token }) }),
++    onSuccess: async () => { setErro(""); setAviso("E-mail atualizado com o cadastro."); await atualizar(); },
++    onError: (error) => falha(error, "Não foi possível atualizar o e-mail."),
++  });
++  const excluirAssinante = useMutation({
++    mutationFn: (token: string) => api(`/api/v1/contratacoes/${id}/assinatura/excluir-assinante`, { method: "POST", body: JSON.stringify({ token }) }),
++    onSuccess: async () => { setErro(""); setAviso("Assinante excluído."); await atualizar(); },
++    onError: (error) => falha(error, "Não foi possível excluir o assinante."),
++  });
++  const adicionar = useMutation({
++    mutationFn: () => api(`/api/v1/contratacoes/${id}/assinatura/assinante`, { method: "POST", body: JSON.stringify({ nome, email, parte }) }),
++    onSuccess: async () => {
++      setErro("");
++      setAviso("Assinante adicionado.");
++      setNome("");
++      setEmail("");
++      setIncluindo(false);
++      await atualizar();
++    },
++    onError: (error) => falha(error, "Não foi possível adicionar o assinante."),
++  });
++  const excluirEnvelope = useMutation({
++    mutationFn: () => api(`/api/v1/contratacoes/${id}/assinatura`, { method: "DELETE" }),
++    onSuccess: async () => { await atualizar(); onClose(); },
++    onError: (error) => falha(error, "Não foi possível excluir a assinatura digital."),
++  });
++  const dados = query.data?.data;
++  function verDocumento(modo: "original" | "preview" | "baixar") {
++    if (modo === "preview" && dados?.preview_url?.startsWith("http")) {
++      window.open(dados.preview_url, "_blank");
++      return;
++    }
++    window.open(`/api/v1/contratacoes/${id}/assinatura/original${modo === "baixar" ? "?download=1" : ""}`, "_blank");
++  }
++
++  async function copiar(url: string) {
++    await navigator.clipboard.writeText(url);
++    setCopiado(url);
++    setAviso("Link copiado.");
++  }
++
++  return (
++    <div className="fixed inset-0 z-50 grid place-items-center p-4" style={{ background: "rgba(15, 23, 42, 0.45)" }} role="dialog" aria-modal="true" aria-labelledby="painel-assinatura">
++      <div style={{ ...card, width: "min(1100px, 100%)", maxHeight: "90vh", overflow: "auto", padding: 22 }}>
++        {query.isLoading ? <p>Carregando assinatura…</p> : null}
++        {query.isError ? <p style={{ color: "#be123c" }}>Não foi possível abrir a assinatura.</p> : null}
++        {dados ? (
++          <>
++            <h2 id="painel-assinatura" style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#1e293b" }}>
++              {dados.nome}. <span style={{ fontWeight: 700 }}>Status: {dados.status}</span>
++            </h2>
++            {dados.enviado_em ? <p style={{ margin: "10px 0 0", color: "#475569" }}>Enviado para assinatura {dados.enviado_em}</p> : <p style={{ margin: "10px 0 0", color: "#475569" }}>Este documento ainda não foi enviado para assinatura digital.</p>}
++            {dados.status !== "Não enviado" ? (
++              <p style={{ margin: "12px 0", display: "flex", gap: 14 }}>
++                <button type="button" onClick={() => { setErro(""); setIncluindo((valor) => !valor); }} style={{ border: 0, background: "transparent", color: "#0369a1", fontWeight: 700, cursor: "pointer", padding: 0 }}>Adicionar Assinante</button>
++                <button type="button" onClick={() => setConfirmarExclusao(true)} style={{ border: 0, background: "transparent", color: "#0369a1", fontWeight: 700, cursor: "pointer", padding: 0 }}>Excluir Assinatura Digital</button>
++              </p>
++            ) : null}
++            {incluindo ? (
++              <form
++                style={{ display: "grid", gap: 8, gridTemplateColumns: "1.2fr 1.4fr 1.4fr auto", marginBottom: 12 }}
++                onSubmit={(event) => { event.preventDefault(); setErro(""); adicionar.mutate(); }}
++              >
++                <input aria-label="Nome do assinante" value={nome} onChange={(event) => setNome(event.target.value)} placeholder="Nome" style={campo} />
++                <input aria-label="E-mail do assinante" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="E-mail" style={campo} />
++                <select aria-label="Parte" value={parte} onChange={(event) => setParte(event.target.value)} style={campo}>
++                  {partes.map((item) => <option key={item}>{item}</option>)}
++                </select>
++                <Botao type="submit" tom="verde" disabled={adicionar.isPending}>{adicionar.isPending ? "Salvando…" : "Adicionar"}</Botao>
++              </form>
++            ) : null}
++            {confirmarExclusao ? (
++              <p style={{ display: "flex", gap: 8, alignItems: "center" }}>
++                Essa ação apaga o envelope da assinatura digital.
++                <Botao tom="laranja" disabled={excluirEnvelope.isPending} onClick={() => excluirEnvelope.mutate()}>Excluir</Botao>
++                <Botao tom="claro" onClick={() => setConfirmarExclusao(false)}>Cancelar</Botao>
++              </p>
++            ) : null}
++            <div style={{ overflowX: "auto" }}>
++              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
++                <thead>
++                  <tr style={{ background: "#f8fafc", textAlign: "left" }}>
++                    {["Partes", "Nome", "E-mail", "Status", "Data Assinatura", "Editar"].map((coluna) => (
++                      <th key={coluna} style={{ padding: "8px 10px", borderBottom: "1px solid #e2e8f0", color: "#64748b" }}>{coluna}</th>
++                    ))}
++                  </tr>
++                </thead>
++                <tbody>
++                  {dados.signatarios.map((item) => (
++                    <tr key={`${item.tipo}-${item.token ?? item.email}`}>
++                      <td style={celula}>
++                        {item.parte}
++                        {item.editar ? <Link to={item.editar} style={{ marginLeft: 6, color: "#0369a1" }} aria-label={`Editar ${item.parte}`}>✎</Link> : null}
++                      </td>
++                      <td style={celula}>{item.nome || "—"}</td>
++                      <td style={celula}>
++                        <div>{item.email || "—"}</div>
++                        {item.url ? (
++                          <div style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
++                            <span style={{ color: "#0369a1", wordBreak: "break-all" }}>{item.url}</span>
++                            <Botao tom="claro" onClick={() => void copiar(item.url!)}>{copiado === item.url ? "Copiado" : "Copiar link"}</Botao>
++                          </div>
++                        ) : null}
++                      </td>
++                      <td style={celula}>{item.status}</td>
++                      <td style={celula}>{item.data || ""}</td>
++                      <td style={celula}>
++                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
++                          {item.baixar ? (
++                            <Botao tom="verde" onClick={() => verDocumento("baixar")}>Baixar</Botao>
++                          ) : item.token ? (
++                            <>
++                              <Botao tom="verde" disabled={reenviar.isPending} onClick={() => { setErro(""); reenviar.mutate(item.token!); }}>Reenviar Link</Botao>
++                              <Botao tom="verde" disabled={emailAssinante.isPending} onClick={() => { setErro(""); emailAssinante.mutate(item.token!); }}>Atualizar E-mail</Botao>
++                              <Botao tom="verde" disabled={excluirAssinante.isPending} onClick={() => { setErro(""); excluirAssinante.mutate(item.token!); }}>Excluir</Botao>
++                            </>
++                          ) : null}
++                        </div>
++                      </td>
++                    </tr>
++                  ))}
++                </tbody>
++              </table>
++            </div>
++            {erro ? <p style={{ color: "#be123c" }}>{erro}</p> : null}
++            {aviso ? <p style={{ color: "#0f766e" }}>{aviso}</p> : null}
++            <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
++              <Botao tom="laranja" onClick={() => verDocumento("original")}>Imprimir Original</Botao>
++              <Botao tom="verde" onClick={() => verDocumento("preview")}>Preview Assinaturas</Botao>
++              <Botao tom="claro" onClick={onClose}>Fechar</Botao>
++            </div>
++          </>
++        ) : null}
++      </div>
++    </div>
++  );
++}
++
++const campo: CSSProperties = {
++  height: 36,
++  border: "1px solid #cbd5e1",
++  borderRadius: 8,
++  padding: "0 10px",
++  color: "#1e293b",
++  background: "#fff",
++};
++
++const celula: CSSProperties = { padding: "10px", borderBottom: "1px solid #e2e8f0", verticalAlign: "top" };
+diff --git a/frontend/src/pages/RescisaoDetailPage.tsx b/frontend/src/pages/RescisaoDetailPage.tsx
+index 4904a4a..b5103e7 100644
+--- a/frontend/src/pages/RescisaoDetailPage.tsx
++++ b/frontend/src/pages/RescisaoDetailPage.tsx
+@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+ import { useEffect, useMemo, useState } from "react";
+ import { Link, useNavigate, useParams } from "react-router-dom";
+ import { DocumentosContratacao } from "@/components/documentos-contratacao";
++import { ConfirmacaoAssinatura } from "@/components/painel-assinatura";
+ import { Badge, Button, Card, Field, Input, Select, Skeleton, Textarea, cn } from "@/components/ui";
+ import { ApiError, api } from "@/lib/api";
+ import { dateBr, formatCpf, formatPhone, money, regimeLabel, situacaoLabel, textoPlano } from "@/lib/format";
+@@ -67,6 +68,7 @@ export function RescisaoDetailPage() {
+   const [previa, setPrevia] = useState(false);
+   const [message, setMessage] = useState("");
+   const [resumoPronto, setResumoPronto] = useState(false);
++  const [assinatura, setAssinatura] = useState<"perguntar" | "enviado" | null>(null);
+ 
+   const query = useQuery({
+     queryKey: ["rescisao-contratacao", id],
+@@ -110,10 +112,20 @@ export function RescisaoDetailPage() {
+       await client.invalidateQueries({ queryKey: ["contratacoes"] });
+       await client.invalidateQueries({ queryKey: ["contratacao", id] });
+       await client.invalidateQueries({ queryKey: ["contratacao-documentos", id] });
+-      navigate(`/contratacoes/${id}`);
++      setAssinatura("perguntar");
+     },
+     onError: (error) => setMessage(error instanceof ApiError ? error.message : "Não foi possível demitir."),
+   });
++  const enviarAssinatura = useMutation({
++    mutationFn: () => api(`/api/v1/contratacoes/${id}/assinatura`, { method: "POST" }),
++    onSuccess: async () => {
++      setMessage("");
++      setAssinatura("enviado");
++      await client.invalidateQueries({ queryKey: ["contratacao-documentos", id] });
++      await client.invalidateQueries({ queryKey: ["contratacao-assinatura", id] });
++    },
++    onError: (error) => setMessage(error instanceof ApiError ? error.message : "A ZapSign não enviou a assinatura."),
++  });
+ 
+   const cand = candidato.data?.data;
+   const empresa = data?.empresa_fantasia || data?.empresa_razao || "—";
+@@ -260,6 +272,16 @@ export function RescisaoDetailPage() {
+       )}
+ 
+       <DocumentosContratacao id={String(data.id_contratacao)} />
++      {assinatura ? (
++        <ConfirmacaoAssinatura
++          enviando={enviarAssinatura.isPending}
++          enviado={assinatura === "enviado"}
++          erro={message}
++          onSim={() => enviarAssinatura.mutate()}
++          onNao={() => navigate(`/contratacoes/${id}`)}
++          onVerDocumento={() => navigate(`/contratacoes/${id}`)}
++        />
++      ) : null}
+       {data.situacao === "encerrada" ? (
+         <p className="text-sm">
+           <Link className="font-semibold text-cyan-800" to={`/contratacoes/${data.id_contratacao}`}>Abrir nas informações da contratação</Link>
+diff --git a/prisma/migrations/20261028220000_rescisao_assinatura/migration.sql b/prisma/migrations/20261028220000_rescisao_assinatura/migration.sql
+new file mode 100644
+index 0000000..7b89594
+--- /dev/null
++++ b/prisma/migrations/20261028220000_rescisao_assinatura/migration.sql
+@@ -0,0 +1,5 @@
++ALTER TABLE dna_work.rescisao_documento ADD COLUMN IF NOT EXISTS signatarios jsonb;
++ALTER TABLE dna_work.rescisao_documento ADD COLUMN IF NOT EXISTS status_doc character varying(40);
++ALTER TABLE dna_work.rescisao_documento ADD COLUMN IF NOT EXISTS original_url text;
++ALTER TABLE dna_work.rescisao_documento ADD COLUMN IF NOT EXISTS signed_url text;
++ALTER TABLE dna_work.rescisao_documento ADD COLUMN IF NOT EXISTS enviado_em timestamp without time zone;
+-- 
+2.43.0
+
