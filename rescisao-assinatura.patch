@@ -1,30 +1,51 @@
-From c043d9ebab120f280984c0a5c06cab93fcfc12a7 Mon Sep 17 00:00:00 2001
+From 4e9d886f83c305660d9947ff79269dd58940dc75 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Thu, 29 Oct 2026 14:32:55 +0000
 Subject: [PATCH] =?UTF-8?q?Confirma=20a=20assinatura=20digital=20da=20resc?=
- =?UTF-8?q?is=C3=A3o=20e=20acompanha=20o=20link=20de=20cada=20parte.?=
+ =?UTF-8?q?is=C3=A3o=20e=20usa=20a=20conta=20de=20e-mail=20j=C3=A1=20cadas?=
+ =?UTF-8?q?trada.?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
+ backend/package.json                          |   1 +
  backend/src/lib/assinatura-rescisao.ts        | 339 ++++++++++++++++
+ backend/src/lib/email-conta.ts                | 119 ++++++
+ backend/src/lib/email-modelo.ts               |  17 +-
  backend/src/lib/zapsign.ts                    |  66 +++-
  .../repositories/contratacao.repository.ts    |  86 +++-
  backend/src/routes/index.ts                   |  31 +-
  backend/src/schemas/contratacao.ts            |  10 +
- backend/src/services/contratacao.service.ts   | 371 ++++++++++++++++--
+ backend/src/services/contratacao.service.ts   | 370 ++++++++++++++++--
+ backend/src/services/tce.service.ts           |   9 +-
  backend/test/assinatura-rescisao.test.ts      |  93 +++++
+ backend/test/email-conta.test.ts              |  34 ++
  .../src/components/documentos-contratacao.tsx |  43 +-
  frontend/src/components/painel-assinatura.tsx | 287 ++++++++++++++
  frontend/src/pages/RescisaoDetailPage.tsx     |  24 +-
+ package-lock.json                             |  88 +----
  .../migration.sql                             |   5 +
- 11 files changed, 1314 insertions(+), 41 deletions(-)
+ 17 files changed, 1486 insertions(+), 136 deletions(-)
  create mode 100644 backend/src/lib/assinatura-rescisao.ts
+ create mode 100644 backend/src/lib/email-conta.ts
  create mode 100644 backend/test/assinatura-rescisao.test.ts
+ create mode 100644 backend/test/email-conta.test.ts
  create mode 100644 frontend/src/components/painel-assinatura.tsx
  create mode 100644 prisma/migrations/20261028220000_rescisao_assinatura/migration.sql
 
+diff --git a/backend/package.json b/backend/package.json
+index 11dc560..7b2afd5 100644
+--- a/backend/package.json
++++ b/backend/package.json
+@@ -26,6 +26,7 @@
+     "fastify": "^5.6.1",
+     "fastify-type-provider-zod": "^4.0.2",
+     "mysql2": "^3.24.6",
++    "nodemailer": "^10.3.1",
+     "pdf-lib": "^1.17.1",
+     "pg": "^8.16.3",
+     "zod": "^3.25.76"
 diff --git a/backend/src/lib/assinatura-rescisao.ts b/backend/src/lib/assinatura-rescisao.ts
 new file mode 100644
 index 0000000..e64bfca
@@ -370,6 +391,189 @@ index 0000000..e64bfca
 +  const valor = (tipo: string) => partes.find((item) => item.type === tipo)?.value ?? "00";
 +  return `${valor("year")}-${valor("month")}-${valor("day")}T${valor("hour")}:${valor("minute")}:${valor("second")}`;
 +}
+diff --git a/backend/src/lib/email-conta.ts b/backend/src/lib/email-conta.ts
+new file mode 100644
+index 0000000..3cd3ed9
+--- /dev/null
++++ b/backend/src/lib/email-conta.ts
+@@ -0,0 +1,119 @@
++import type { Pool } from "pg";
++import nodemailer from "nodemailer";
++import type { AppConfig } from "../config.js";
++
++type AmbienteEmail = Pick<AppConfig, "MAILJET_API_KEY" | "MAILJET_SECRET_KEY" | "MAILJET_FROM" | "MAILJET_FROM_NAME">;
++import { AppError } from "./errors.js";
++import { enviarEmailMailjet } from "./mailjet.js";
++
++type Destino = { email: string; nome: string };
++type Anexo = { filename: string; contentType: string; base64: string };
++
++export type ContaEnvio = {
++  apiKey: string;
++  secret: string;
++  fromEmail: string;
++  fromName: string;
++  host: string;
++  port: number;
++  usuario: string;
++  senha: string;
++};
++
++type LinhaConta = {
++  secret_jetmail?: string | null;
++  remetente_jetmail?: string | null;
++  nome?: string | null;
++  host?: string | null;
++  porta?: string | null;
++  usuario?: string | null;
++  senha?: string | null;
++  enviadopor?: string | null;
++};
++
++const colunas = `s.secret_jetmail, s.remetente_jetmail, s.nome, s.host, s.porta, s.usuario, s.senha, s.enviadopor`;
++
++export function montarConta(config: AmbienteEmail, linha?: LinhaConta | null): ContaEnvio {
++  const porta = Number(linha?.porta || 465);
++  return {
++    apiKey: config.MAILJET_API_KEY,
++    secret: config.MAILJET_SECRET_KEY || linha?.secret_jetmail || "",
++    fromEmail: linha?.remetente_jetmail || linha?.enviadopor || config.MAILJET_FROM,
++    fromName: linha?.nome || config.MAILJET_FROM_NAME,
++    host: linha?.host || "",
++    port: Number.isInteger(porta) && porta > 0 ? porta : 465,
++    usuario: linha?.usuario || "",
++    senha: linha?.senha || "",
++  };
++}
++
++export function canalEnvio(conta: ContaEnvio): "mailjet" | "smtp" | "nenhum" {
++  if (conta.apiKey && conta.secret) return "mailjet";
++  if (conta.host && conta.usuario && conta.senha) return "smtp";
++  return "nenhum";
++}
++
++export async function carregarContaPorDescricao(db: Pool, config: AppConfig, descricao: string): Promise<ContaEnvio> {
++  const resultado = await db.query<LinhaConta>(`
++    SELECT ${colunas}
++    FROM dna_work.emailsvinculo v
++    JOIN dna_work.servidor_email s ON s.id::text = v.conta_email::text
++    WHERE v.descricao = $1
++    LIMIT 1
++  `, [descricao]);
++  return montarConta(config, resultado.rows[0]);
++}
++
++export async function carregarContaPorRemetente(db: Pool, config: AppConfig, remetente: string): Promise<ContaEnvio> {
++  const resultado = await db.query<LinhaConta>(`
++    SELECT ${colunas}
++    FROM dna_work.servidor_email s
++    WHERE lower(s.remetente_jetmail) = lower($1)
++    LIMIT 1
++  `, [remetente]);
++  return montarConta(config, resultado.rows[0]);
++}
++
++export async function enviarPelaConta(conta: ContaEnvio, input: {
++  to: Destino[];
++  subject: string;
++  html: string;
++  attachments?: Anexo[];
++}) {
++  const canal = canalEnvio(conta);
++  if (canal === "mailjet") {
++    return enviarEmailMailjet({
++      apiKey: conta.apiKey,
++      secret: conta.secret,
++      fromEmail: conta.fromEmail,
++      fromName: conta.fromName,
++      to: input.to,
++      subject: input.subject,
++      html: input.html,
++      attachments: input.attachments,
++    });
++  }
++  if (canal === "smtp") {
++    const transporte = nodemailer.createTransport({
++      host: conta.host,
++      port: conta.port,
++      secure: conta.port === 465,
++      auth: { user: conta.usuario, pass: conta.senha },
++    });
++    const destinos = input.to.filter((item) => item.email.includes("@"));
++    if (!destinos.length) throw new AppError(422, "EMAIL_AUSENTE", "Nenhum destinatário com e-mail.");
++    await transporte.sendMail({
++      from: { name: conta.fromName, address: conta.fromEmail },
++      to: destinos.map((item) => ({ name: item.nome || item.email, address: item.email })),
++      subject: input.subject,
++      html: input.html,
++      attachments: (input.attachments ?? []).map((item) => ({
++        filename: item.filename,
++        content: Buffer.from(item.base64, "base64"),
++        contentType: item.contentType,
++      })),
++    });
++    return { enviados: destinos.map((item) => item.email) };
++  }
++  throw new AppError(503, "MAILJET_NAO_CONFIGURADO", "Defina MAILJET_API_KEY e MAILJET_SECRET_KEY no ambiente.");
++}
+diff --git a/backend/src/lib/email-modelo.ts b/backend/src/lib/email-modelo.ts
+index a40be75..ae4dc80 100644
+--- a/backend/src/lib/email-modelo.ts
++++ b/backend/src/lib/email-modelo.ts
+@@ -1,7 +1,7 @@
+ import type { Pool } from "pg";
+ import type { AppConfig } from "../config.js";
++import { carregarContaPorDescricao, enviarPelaConta } from "./email-conta.js";
+ import { AppError } from "./errors.js";
+-import { enviarEmailMailjet } from "./mailjet.js";
+ 
+ type Destino = { email: string; nome: string };
+ type Anexo = { filename: string; contentType: string; base64: string };
+@@ -23,11 +23,10 @@ export async function enviarModelo(
+   variaveis: Record<string, string>,
+   opcoes?: { copia?: Destino; attachments?: Anexo[] },
+ ) {
+-  const modelo = await db.query<{ assunto: string | null; texto: string | null; remetente: string | null }>(`
+-    SELECT e.assunto, e.texto, s.remetente_jetmail AS remetente
++  const modelo = await db.query<{ assunto: string | null; texto: string | null }>(`
++    SELECT e.assunto, e.texto
+     FROM dna_work.emailsvinculo v
+     JOIN dna_work.emails e ON e.id_email = v.id_email
+-    LEFT JOIN dna_work.servidor_email s ON s.id::text = v.conta_email::text
+     WHERE v.descricao = $1
+     LIMIT 1
+   `, [descricao]);
+@@ -35,7 +34,7 @@ export async function enviarModelo(
+   if (!linha?.texto) throw new AppError(404, "MODELO_NAO_ENCONTRADO", `O modelo "${descricao}" não está cadastrado.`);
+   const assunto = aplicarVariaveis(linha.assunto ?? descricao, variaveis);
+   const html = aplicarVariaveis(linha.texto, variaveis);
+-  const remetente = linha.remetente || config.MAILJET_FROM;
++  const conta = await carregarContaPorDescricao(db, config, descricao);
+   const destinos = [para, opcoes?.copia].filter((item): item is Destino => Boolean(item?.email.includes("@")));
+   const vistos = new Set<string>();
+   const enviados: string[] = [];
+@@ -43,11 +42,7 @@ export async function enviarModelo(
+     const email = destino.email.trim().toLowerCase();
+     if (vistos.has(email)) continue;
+     vistos.add(email);
+-    await enviarEmailMailjet({
+-      apiKey: config.MAILJET_API_KEY,
+-      secret: config.MAILJET_SECRET_KEY,
+-      fromEmail: remetente,
+-      fromName: config.MAILJET_FROM_NAME,
++    await enviarPelaConta(conta, {
+       to: [{ email, nome: destino.nome || email }],
+       subject: assunto,
+       html,
+@@ -55,7 +50,7 @@ export async function enviarModelo(
+     });
+     enviados.push(email);
+   }
+-  return { enviados, remetente };
++  return { enviados, remetente: conta.fromEmail };
+ }
+ 
+ export async function listarModelosEmail(db: Pool) {
 diff --git a/backend/src/lib/zapsign.ts b/backend/src/lib/zapsign.ts
 index a19ef95..2369fb6 100644
 --- a/backend/src/lib/zapsign.ts
@@ -646,7 +850,7 @@ index fa68d84..ad56f8a 100644
  export type ContratacaoEncerrar = z.infer<typeof contratacaoEncerrarSchema>;
  export type ContratacaoListQuery = z.infer<typeof contratacaoListSchema>;
 diff --git a/backend/src/services/contratacao.service.ts b/backend/src/services/contratacao.service.ts
-index 5d60bff..e543b6e 100644
+index 5d60bff..afe390c 100644
 --- a/backend/src/services/contratacao.service.ts
 +++ b/backend/src/services/contratacao.service.ts
 @@ -11,7 +11,29 @@ import { one } from "../repositories/sql.js";
@@ -663,7 +867,7 @@ index 5d60bff..e543b6e 100644
 +  reenviarAssinanteZapSign,
 +  removerAssinanteZapSign,
 +} from "../lib/zapsign.js";
-+import { enviarEmailMailjet } from "../lib/mailjet.js";
++import { carregarContaPorDescricao, enviarPelaConta } from "../lib/email-conta.js";
 +import {
 +  agoraSp,
 +  apresentarPainel,
@@ -728,7 +932,7 @@ index 5d60bff..e543b6e 100644
      if (!signers.length) {
        throw new AppError(422, "EMAIL_AUSENTE", "Candidato ou empresa precisam ter e-mail para a assinatura digital.");
      }
-@@ -250,18 +263,326 @@ export class ContratacaoService {
+@@ -250,18 +263,325 @@ export class ContratacaoService {
        pdf,
        signers,
      });
@@ -806,17 +1010,16 @@ index 5d60bff..e543b6e 100644
 +        enviou = false;
 +      }
 +    }
-+    if (this.config.MAILJET_API_KEY && this.config.MAILJET_SECRET_KEY) {
-+      await enviarEmailMailjet({
-+        apiKey: this.config.MAILJET_API_KEY,
-+        secret: this.config.MAILJET_SECRET_KEY,
-+        fromEmail: this.config.MAILJET_FROM,
-+        fromName: this.config.MAILJET_FROM_NAME,
++    try {
++      const conta = await carregarContaPorDescricao(this.db, this.config, "Assinatura Digital Candidato");
++      await enviarPelaConta(conta, {
 +        to: [{ email: signer.email, nome: signer.nome }],
 +        subject: `Assinatura digital — ${painelAtual.nome}`,
 +        html: `<p>Olá ${signer.nome},</p><p>Segue o link para assinar ${painelAtual.nome}:</p><p><a href="${signer.url}">${signer.url}</a></p>`,
 +      });
 +      enviou = true;
++    } catch {
++      // Quando a ZapSign também não reenvia, o retorno pede para copiar o link.
 +    }
 +    if (!enviou) {
 +      throw new AppError(502, "LINK_NAO_REENVIADO", "Não foi possível reenviar agora. Copie o link e envie para o assinante.");
@@ -1062,6 +1265,34 @@ index 5d60bff..e543b6e 100644
    }
  
    async encerrar(id: number, input: ContratacaoEncerrar) {
+diff --git a/backend/src/services/tce.service.ts b/backend/src/services/tce.service.ts
+index 2e4863c..1f72852 100644
+--- a/backend/src/services/tce.service.ts
++++ b/backend/src/services/tce.service.ts
+@@ -12,7 +12,7 @@ import { fillTceTemplate } from "../lib/tce-pdf.js";
+ import { APOLICE_SEGURO, CAMPOS_DATA, dataParaPdf, emptyManual, ESCOLA_KEYS, type Concedente, type ManualData } from "../lib/tce-fields.js";
+ import { enviarModelo, textoHtml } from "../lib/email-modelo.js";
+ import { criarDocumentoZapSign } from "../lib/zapsign.js";
+-import { enviarEmailMailjet } from "../lib/mailjet.js";
++import { carregarContaPorRemetente, enviarPelaConta } from "../lib/email-conta.js";
+ import type { TermoService } from "./termo.service.js";
+ 
+ export type GerarTceInput = {
+@@ -268,12 +268,9 @@ export class TceService {
+     ].filter((item) => item.email.includes("@") && !vistos.has(item.email) && vistos.add(item.email));
+     const nome = campos?.nome || termo.candidato_nome || "estagiário";
+     const enviados: string[] = [];
++    const conta = await carregarContaPorRemetente(this.db, this.config, this.config.MAILJET_FROM);
+     for (const destino of destinatarios) {
+-      await enviarEmailMailjet({
+-        apiKey: this.config.MAILJET_API_KEY,
+-        secret: this.config.MAILJET_SECRET_KEY,
+-        fromEmail: this.config.MAILJET_FROM,
+-        fromName: this.config.MAILJET_FROM_NAME,
++      await enviarPelaConta(conta, {
+         to: [destino],
+         subject: `TCE - ${nome}`,
+         html: `<p>Olá,</p><p>A DNA Work envia o Termo de Compromisso de Estágio de <strong>${nome}</strong> em anexo.</p><p>Em caso de dúvida, responda este e-mail.</p>`,
 diff --git a/backend/test/assinatura-rescisao.test.ts b/backend/test/assinatura-rescisao.test.ts
 new file mode 100644
 index 0000000..cdbd4bc
@@ -1160,6 +1391,46 @@ index 0000000..cdbd4bc
 +  assert.equal(painel.signatarios[1]?.data, "28/10/2026 18:13:14");
 +  assert.equal(rotuloColuna("pending", true), "Aguardando");
 +  assert.equal(rotuloDocumento(null, false), "Não enviado");
++});
+diff --git a/backend/test/email-conta.test.ts b/backend/test/email-conta.test.ts
+new file mode 100644
+index 0000000..f55e251
+--- /dev/null
++++ b/backend/test/email-conta.test.ts
+@@ -0,0 +1,34 @@
++import assert from "node:assert/strict";
++import test from "node:test";
++import { canalEnvio, montarConta } from "../src/lib/email-conta.js";
++
++const ambiente = {
++  MAILJET_API_KEY: "",
++  MAILJET_SECRET_KEY: "",
++  MAILJET_FROM: "documentos@dnawork.ai",
++  MAILJET_FROM_NAME: "DNA Work",
++};
++
++test("sem chave no ambiente usa o segredo e o servidor salvos na conta", () => {
++  const conta = montarConta(ambiente, {
++    secret_jetmail: "segredo-da-conta",
++    remetente_jetmail: "contratos@dnawork.ai",
++    nome: "Assinatura de Contratos",
++    host: "smtp.gmail.com",
++    porta: "465",
++    usuario: "conta@dnawork.ai",
++    senha: "senha-da-conta",
++  });
++  assert.equal(conta.secret, "segredo-da-conta");
++  assert.equal(conta.fromEmail, "contratos@dnawork.ai");
++  assert.equal(canalEnvio(conta), "smtp");
++});
++
++test("com as duas chaves da Mailjet o envio sai pela API", () => {
++  const conta = montarConta({ ...ambiente, MAILJET_API_KEY: "chave", MAILJET_SECRET_KEY: "segredo" }, {
++    host: "smtp.gmail.com",
++    usuario: "conta@dnawork.ai",
++    senha: "senha-da-conta",
++  });
++  assert.equal(canalEnvio(conta), "mailjet");
 +});
 diff --git a/frontend/src/components/documentos-contratacao.tsx b/frontend/src/components/documentos-contratacao.tsx
 index 91f155f..d01516a 100644
@@ -1612,6 +1883,294 @@ index 4904a4a..b5103e7 100644
        {data.situacao === "encerrada" ? (
          <p className="text-sm">
            <Link className="font-semibold text-cyan-800" to={`/contratacoes/${data.id_contratacao}`}>Abrir nas informações da contratação</Link>
+diff --git a/package-lock.json b/package-lock.json
+index 9d4b268..0339170 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -35,6 +35,7 @@
+         "fastify": "^5.6.1",
+         "fastify-type-provider-zod": "^4.0.2",
+         "mysql2": "^3.24.6",
++        "nodemailer": "^10.3.1",
+         "pdf-lib": "^1.17.1",
+         "pg": "^8.16.3",
+         "zod": "^3.25.76"
+@@ -1625,9 +1626,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1764,9 +1762,6 @@
+       "cpu": [
+         "arm64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1783,9 +1778,6 @@
+       "cpu": [
+         "arm64"
+       ],
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1802,9 +1794,6 @@
+       "cpu": [
+         "x64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1821,9 +1810,6 @@
+       "cpu": [
+         "x64"
+       ],
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2087,9 +2073,6 @@
+         "arm"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2104,9 +2087,6 @@
+         "arm"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2121,9 +2101,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2138,9 +2115,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2155,9 +2129,6 @@
+         "loong64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2172,9 +2143,6 @@
+         "loong64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2189,9 +2157,6 @@
+         "ppc64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2206,9 +2171,6 @@
+         "ppc64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2223,9 +2185,6 @@
+         "riscv64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2240,9 +2199,6 @@
+         "riscv64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2257,9 +2213,6 @@
+         "s390x"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2274,9 +2227,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2291,9 +2241,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2529,9 +2476,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2549,9 +2493,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2569,9 +2510,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -2589,9 +2527,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -4472,9 +4407,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MPL-2.0",
+       "optional": true,
+       "os": [
+@@ -4496,9 +4428,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MPL-2.0",
+       "optional": true,
+       "os": [
+@@ -4520,9 +4449,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MPL-2.0",
+       "optional": true,
+       "os": [
+@@ -4544,9 +4470,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MPL-2.0",
+       "optional": true,
+       "os": [
+@@ -4776,6 +4699,15 @@
+         "node": ">=18"
+       }
+     },
++    "node_modules/nodemailer": {
++      "version": "10.3.1",
++      "resolved": "https://registry.npmjs.org/nodemailer/-/nodemailer-10.3.1.tgz",
++      "integrity": "sha512-uF0AFsJC07Y1vdW7p580DKAnh7rAO+4UPSSB3mDCPNDufoiaOebV6JmrzpxB14OjEEEiBsNdYoM2Y+fN8M7BBA==",
++      "license": "MIT-0",
++      "engines": {
++        "node": ">=20.0.0"
++      }
++    },
+     "node_modules/nypm": {
+       "version": "0.6.11",
+       "resolved": "https://registry.npmjs.org/nypm/-/nypm-0.6.11.tgz",
 diff --git a/prisma/migrations/20261028220000_rescisao_assinatura/migration.sql b/prisma/migrations/20261028220000_rescisao_assinatura/migration.sql
 new file mode 100644
 index 0000000..7b89594
