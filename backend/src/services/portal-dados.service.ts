@@ -12,6 +12,14 @@ function dataLegado(iso: string) {
   return ano && mes && dia ? `${ano}/${mes}/${dia}` : iso;
 }
 
+function situacaoVaga(status: unknown) {
+  const codigo = Number(status);
+  if ([0, 3, 4, 5, 9].includes(codigo)) return "Aberta";
+  if (codigo === 8) return "Pausada";
+  if (codigo === 1) return "Contratada";
+  return "Fechada";
+}
+
 function dataValida(valor: string | undefined) {
   return valor && /^\d{4}-\d{2}-\d{2}$/.test(valor) ? valor : undefined;
 }
@@ -127,7 +135,7 @@ export class PortalDadosService {
             and coalesce(col.status_colaborador, 1) = 1
         ) pessoas) as ativos,
         (select count(*) from dna_work.vaga
-          where id_empresa = $1 and coalesce(status, 0) <> 2)::text as vagas,
+          where id_empresa = $1 and status in (0, 3, 4, 5, 9))::text as vagas,
         (select count(*) from dna_work.conratacaovaga where id_empresa = $1)::text as contratos,
         (select count(*)::text
           from dna_work.tabela_ponto t
@@ -213,8 +221,10 @@ export class PortalDadosService {
   async vagas(usuarioId: string, empresaId: string, busca: string) {
     await this.garantir(usuarioId, empresaId);
     const rows = await this.db.query(`
-      select v.id_vaga as id, v.comparador as codigo, v.cargo, v.quantidade_posicoes as vagas, v.status, v.dataabertura, v.salario, v.cidade, v.periodo, m.descricao as contrato
+      select v.id_vaga as id, v.comparador as codigo, v.cargo, v.quantidade_posicoes as vagas, v.status, v.dataabertura, v.salario,
+             coalesce(nullif(btrim(v.cidade), ''), e.cidade) as cidade, v.periodo, m.descricao as contrato
       from dna_work.vaga v
+      join dna_work.empresa e on e.id_empresa = v.id_empresa
       left join dna_work.modalidade_vaga m on m.id = v.tipo_vaga
       where v.id_empresa = $1
         and ($2 = '' or v.cargo ilike $3)
@@ -223,7 +233,7 @@ export class PortalDadosService {
     `, [empresaId, busca, `%${busca}%`]);
     return rows.rows.map((row) => ({
       ...row,
-      situacao: Number(row.status) === 2 ? "Encerrada" : "Aberta",
+      situacao: situacaoVaga(row.status),
     }));
   }
 
@@ -906,9 +916,10 @@ export class PortalDadosService {
   private async detalheVaga(empresaId: string, id: string) {
     const rows = await this.db.query(`
       select v.comparador as codigo, v.cargo, m.descricao as modalidade, v.quantidade_posicoes, v.salario,
-             v.cidade, v.periodo, v.dataabertura, v.dataencerramento, v.escolaridade, v.experiencia,
+             coalesce(nullif(btrim(v.cidade), ''), e.cidade) as cidade, v.periodo, v.dataabertura, v.dataencerramento, v.escolaridade, v.experiencia,
              v.atribuicaoes, v.beneficios, v.jornada, v.texto_carga, v.obs, v.responsavel, v.remoto, v.status
       from dna_work.vaga v
+      join dna_work.empresa e on e.id_empresa = v.id_empresa
       left join dna_work.modalidade_vaga m on m.id::text = v.tipo_vaga::text
       where v.id_vaga = $1 and v.id_empresa = $2
     `, [id, empresaId]);
@@ -918,7 +929,7 @@ export class PortalDadosService {
       ["Código", linha.codigo], ["Cargo", linha.cargo], ["Modalidade", linha.modalidade],
       ["Vagas", linha.quantidade_posicoes], ["Salário", dinheiro(linha.salario)], ["Cidade", linha.cidade],
       ["Período", linha.periodo], ["Jornada", linha.jornada || linha.texto_carga],
-      ["Situação", Number(linha.status) === 2 ? "Encerrada" : "Aberta"],
+      ["Situação", situacaoVaga(linha.status)],
       ["Abertura", linha.dataabertura], ["Encerramento", linha.dataencerramento],
       ["Escolaridade", linha.escolaridade], ["Experiência", linha.experiencia],
       ["Atribuições", linha.atribuicaoes], ["Benefícios", linha.beneficios],
