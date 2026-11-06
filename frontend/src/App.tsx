@@ -154,7 +154,7 @@ function Portal({ sessao }: { sessao: Sessao }) {
           {pathname === "/ponto/colaboradores" ? <ColaboradoresPonto /> : null}
           {pathname.startsWith("/ponto/colaborador/") ? <RelatorioPontoColaborador id={decodeURIComponent(pathname.slice("/ponto/colaborador/".length))} /> : null}
           {pathname === "/ponto/relatorio" ? <RelatorioPonto /> : null}
-          {pathname === "/vagas/nova" ? <VagaNova tipo={new URLSearchParams(search).get("tipo") ?? "2"} /> : null}
+          {pathname === "/vagas/nova" && new URLSearchParams(search).get("tipo") !== "4" ? <VagaNova tipo={new URLSearchParams(search).get("tipo") ?? "2"} /> : null}
           {pathname === "/talentos" ? <Listagem titulo="Banco de talentos" caminho="/api/v1/empresa/talentos" novo="/talentos/novo" linkNome={(linha) => linha.id ? `/talentos/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cidade", titulo: "Cidade" }, { chave: "bairro", titulo: "Bairro" }, { chave: "estado", titulo: "Estado" }, { chave: "ensino", titulo: "Ensino" }, { chave: "curso", titulo: "Curso" }, { chave: "datacadastro", titulo: "Cadastro" }]} /> : null}
           {pathname === "/talentos/novo" ? <Formulario titulo="Cadastrar talento" destino="/api/v1/empresa/talentos" voltar="/talentos" campos={[["nome", "Nome", "text"], ["cpf", "CPF", "text"], ["email", "E-mail", "email"], ["celular", "Celular", "text"], ["cidade", "Cidade", "text"]]} /> : null}
           {pathname === "/relatorios/encaminhamentos" ? <Listagem titulo="Candidatos encaminhados" caminho="/api/v1/empresa/encaminhamentos" novo="/vagas" linkNome={(linha) => linha.id ? `/relatorios/encaminhamentos/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Candidato" }, { chave: "cargo", titulo: "Vaga" }, { chave: "data", titulo: "Convocação" }, { chave: "data_entrevista", titulo: "Entrevista" }, { chave: "hora", titulo: "Hora" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
@@ -481,7 +481,7 @@ function destinoDoLink(link: string): string {
   if (base === "cadastrar-empresa-filial.php") return "/empresa/filial";
   if (base === "buscar-usuario.php") return "/usuarios";
   if (base === "cadastrar-usuario.php") return "/usuarios/novo";
-  if (base === "cadastrar-vaga.php" && tipo === "4") return "/vagas/nova?tipo=4";
+  if (base === "cadastrar-vaga.php" && tipo === "4") return "/vagas";
   if (base === "cadastrar-vaga.php") return "/vagas/nova?tipo=2";
   return `/opcao?link=${encodeURIComponent(link)}`;
 }

@@ -71,7 +71,7 @@ export function FeriadoNovo() {
 }
 
 export function VagaNova({ tipo }: { tipo: string }) {
-  const nome = tipo === "1" ? "Estágio" : tipo === "4" ? "PJ" : "CLT";
+  const nome = tipo === "1" ? "Estágio" : "CLT";
   return <Formulario titulo={`Abrir vaga ${nome}`} destino="/api/v1/empresa/vagas" voltar="/vagas" extra={{ tipo }} campos={[
     ["cargo", "Cargo", "text"], ["cidade", "Cidade", "text"], ["salario", "Salário", "text"],
   ]} />;

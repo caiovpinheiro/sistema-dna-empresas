@@ -380,7 +380,8 @@ export class PortalDadosService {
   async salvarVaga(usuarioId: string, empresaId: string, body: Record<string, string>) {
     await this.garantir(usuarioId, empresaId);
     const tipo = Number(body.tipo);
-    if (![1, 2, 4].includes(tipo)) throw new AppError(422, "TIPO_INVALIDO", "A vaga precisa ser estágio, CLT ou PJ.");
+    if (tipo === 4) throw new AppError(422, "TIPO_INDISPONIVEL", "Não abrimos mais vaga PJ.");
+    if (![1, 2].includes(tipo)) throw new AppError(422, "TIPO_INVALIDO", "A vaga precisa ser estágio ou CLT.");
     const id = crypto.randomUUID();
     await this.db.query(`
       insert into dna_work.vaga

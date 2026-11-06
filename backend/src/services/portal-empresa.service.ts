@@ -160,11 +160,11 @@ export class PortalEmpresaService {
       const children: ItemMenu[] = [];
       for (const sub of grupos.filter((grupo) => grupo.menu === item.id_item)) {
         if (Number(sub.tipo) === 1) {
-          children.push({ id: `s${sub.id_submenu}`, label: sub.descricao!.trim(), link: linkUtil(sub.link), children: [] });
+          if (!vagaPj(sub.link)) children.push({ id: `s${sub.id_submenu}`, label: sub.descricao!.trim(), link: linkUtil(sub.link), children: [] });
           continue;
         }
         const folhas = submenu2.rows
-          .filter((folha) => folha.id_submenu1 === sub.id_submenu && sub2Ids.has(String(folha.id_submenu2)) && folha.descricao)
+          .filter((folha) => folha.id_submenu1 === sub.id_submenu && sub2Ids.has(String(folha.id_submenu2)) && folha.descricao && !vagaPj(folha.link))
           .map((folha) => ({
             id: `s2${folha.id_submenu2}`,
             label: folha.descricao!.trim(),
@@ -289,6 +289,10 @@ export class PortalEmpresaService {
 
 function idsDe(valor: string | null | undefined): Set<string> {
   return new Set((valor ?? "").split("%").map((item) => item.trim()).filter(Boolean));
+}
+
+function vagaPj(link: string | null): boolean {
+  return /tipo=4/i.test(link ?? "");
 }
 
 function linkUtil(link: string | null): string | null {
