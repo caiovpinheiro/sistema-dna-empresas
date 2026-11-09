@@ -15,6 +15,7 @@ import { pingServico, tokenDoServico } from "./lib/servico.js";
 import { PortalEmpresaService, type SessaoEmpresa } from "./services/portal-empresa.service.js";
 import { PortalDadosService } from "./services/portal-dados.service.js";
 import { PontoColaboradorService } from "./services/ponto-colaborador.service.js";
+import { CadastroPublicoService } from "./services/cadastro-publico.service.js";
 
 const COOKIE = "dnawork_empresa";
 const COOKIE_PONTO = "dnawork_ponto";
@@ -60,12 +61,13 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   const portal = new PortalEmpresaService(db);
   const dados = new PortalDadosService(db);
   const ponto = new PontoColaboradorService(db);
+  const cadastro = new CadastroPublicoService(db);
 
   app.setErrorHandler((error: unknown, request, reply) => {
     if (error instanceof AppError) {
       return reply.code(error.statusCode).send({
         success: false,
-        error: { code: error.code, message: error.message },
+        error: { code: error.code, message: error.message, ...(error.campos ? { campos: error.campos } : {}) },
       });
     }
     const err = error as { message?: string; statusCode?: number };
@@ -104,7 +106,7 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
 
   app.addHook("onRequest", async (request) => {
     const url = request.url.split("?")[0];
-    if (request.method === "OPTIONS" || url === "/health" || url === "/api/v1/empresa/login" || url === "/api/v1/ponto/login" || url === "/api/v1/servico/ping" || url === "/api/v1/servico/interno") return;
+    if (request.method === "OPTIONS" || url === "/health" || url === "/api/v1/empresa/login" || url === "/api/v1/ponto/login" || url === "/api/v1/servico/ping" || url === "/api/v1/servico/interno" || url.startsWith("/api/v1/publico/cadastro")) return;
     if (url.startsWith("/api/v1/ponto")) {
       await autenticarPonto(app, request);
       return;
@@ -113,6 +115,19 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   });
 
   app.get("/health", async () => ({ ok: true, servico: "empresas" }));
+
+  const limiteCadastro = { config: { rateLimit: { max: 8, timeWindow: "10 minutes" } } };
+  app.get("/api/v1/publico/cadastro/termos", async () => ({ success: true, data: cadastro.termos() }));
+  app.get("/api/v1/publico/cadastro/cnpj/:cnpj", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request) => {
+    const cnpj = (request.params as { cnpj: string }).cnpj;
+    return { success: true, data: await cadastro.consultarCnpj(cnpj) };
+  });
+  app.post("/api/v1/publico/cadastro", limiteCadastro, async (request) => {
+    const bruto = request.body;
+    const website = bruto && typeof bruto === "object" && "website" in bruto ? String((bruto as { website?: unknown }).website ?? "") : "";
+    if (website.trim()) throw new AppError(422, "CADASTRO_RECUSADO", "Não foi possível concluir o cadastro.");
+    return { success: true, data: await cadastro.concluir(bruto, request.ip) };
+  });
 
   app.get("/api/v1/servico/ping", async (request, reply) => {
     if (!tokenDoServico(request.headers["x-service-token"], config.SERVICE_TOKEN)) {

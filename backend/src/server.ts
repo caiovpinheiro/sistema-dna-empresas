@@ -8,6 +8,23 @@ try {
   await db.query("alter table dna_work.usuario_empresa add column if not exists senha_hash text");
   await db.query("alter table dna_work.vaga add column if not exists cidade character varying");
   await db.query(`
+    create table if not exists dna_work.cadastro_empresa_aceite (
+      id uuid primary key,
+      id_empresa varchar(40) not null references dna_work.empresa (id_empresa) on delete cascade,
+      id_vaga varchar(40) references dna_work.vaga (id_vaga) on delete set null,
+      id_usuario varchar(40),
+      versao varchar(40) not null,
+      modalidade varchar(20) not null,
+      condicoes text not null,
+      responsavel varchar(255) not null,
+      cargo varchar(80) not null,
+      email varchar(255) not null,
+      ip varchar(64),
+      comprovante varchar(32) not null unique,
+      aceito_em timestamptz not null default now()
+    )
+  `);
+  await db.query(`
     update dna_work.vaga v
     set cidade = e.cidade
     from dna_work.empresa e

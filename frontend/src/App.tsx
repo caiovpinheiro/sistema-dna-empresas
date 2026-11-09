@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient
 import { Briefcase, Building2, ChevronDown, Circle, Clock, Gauge, GraduationCap, LayoutDashboard, Lock, LogOut, Menu, Settings, User, Users, Wallet, X, type LucideIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { CadastroPage } from "./pages/cadastro";
 import { Consulta, Faturas, Ficha, Inicio } from "./pages/consultas";
 import { CargaNova, ColaboradorNovo, ColaboradoresPonto, EscalaNova, FeriadoNovo, Formulario, Listagem, RelatorioPonto, RelatorioPontoColaborador, VagaNova } from "./pages/ponto";
 import { PontoLoginPage, PontoPage } from "./pages/ponto-colaborador";
@@ -27,6 +28,7 @@ export function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/cadastro" element={<CadastroPage />} />
           <Route path="/ponto/login" element={<PontoLoginPage />} />
           <Route path="/ponto" element={<PontoPage />} />
           <Route path="/*" element={<Protegido />} />
@@ -290,7 +292,8 @@ function LoginPage() {
         <button className="mt-6 h-12 w-full rounded-full bg-[#7c3aed] text-sm font-bold tracking-wide text-white transition duration-200 hover:bg-[#6d28d9] active:scale-[0.98] disabled:opacity-60" disabled={login.isPending}>
           {login.isPending ? "ENTRANDO…" : "ENTRAR"}
         </button>
-        <Link to="/ponto/login" className="mt-4 block text-center text-sm font-semibold text-[#5b21b6]">Sou colaborador e quero bater ponto</Link>
+        <Link to="/cadastro" className="mt-4 block text-center text-sm font-semibold text-[#5b21b6]">Cadastrar minha empresa</Link>
+        <Link to="/ponto/login" className="mt-2 block text-center text-sm font-semibold text-[#5b21b6]">Sou colaborador e quero bater ponto</Link>
       </form>
       </FundoLiquido>
   );

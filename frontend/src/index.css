@@ -36,6 +36,40 @@ button, a {
   to { transform: scale(1.75); opacity: 0; }
 }
 
+@keyframes cadastro-in {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes cadastro-stage-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes cadastro-stage-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(-8px); }
+}
+
+@keyframes cadastro-pop {
+  from { transform: scale(0.7); }
+  to { transform: scale(1); }
+}
+
+.cadastro-enter { animation: cadastro-in 460ms cubic-bezier(.22, 1, .36, 1) both; }
+.cadastro-stage-in { animation: cadastro-stage-in 380ms cubic-bezier(.22, 1, .36, 1) both; }
+.cadastro-stage-out { animation: cadastro-stage-out 165ms ease-in both; pointer-events: none; }
+.cadastro-pop { animation: cadastro-pop 380ms ease-out both; }
+.cadastro-meter { transition: width 430ms cubic-bezier(.2, .75, .3, 1); }
+
+@media (prefers-reduced-motion: reduce) {
+  .cadastro-enter,
+  .cadastro-stage-in,
+  .cadastro-stage-out,
+  .cadastro-pop { animation: none !important; }
+  .cadastro-meter { transition: none !important; }
+}
+
 .aurora-fallback {
   overflow: hidden;
   background: #0a001a;
