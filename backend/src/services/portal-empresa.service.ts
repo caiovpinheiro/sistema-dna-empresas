@@ -47,7 +47,9 @@ export class PortalEmpresaService {
         if (!(await this.argonConfere(usuario.senha_hash, password))) {
           await this.guardarHash(usuario.id_u, password);
         }
-        return this.montarSessao(usuario, null);
+        const sessao = await this.montarSessao(usuario, null);
+        await this.registrarAcesso(sessao.empresas.map((empresa) => empresa.id), sessao.id, sessao.email, true);
+        return sessao;
       }
     }
     throw new AppError(401, "CREDENCIAIS_INVALIDAS", "E-mail ou senha inválidos.");
@@ -180,6 +182,47 @@ export class PortalEmpresaService {
       }
     }
     return menu;
+  }
+
+  /** Entrada grava login. Uso só avança o último uso, no máximo a cada cinco minutos. Falha aqui não impede o acesso. */
+  async registrarAcesso(ids: string[], usuarioId: string, email: string, entrada: boolean): Promise<void> {
+    const empresas = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+    if (!empresas.length || !usuarioId) return;
+    try {
+      await this.garantirTabelaAcesso();
+      await this.db.query(`
+        insert into dna_work.portal_empresa_acesso
+          (id_empresa, id_usuario, email, primeiro_login, ultimo_login, ultimo_uso, logins)
+        select id, $2, $3, now(), now(), now(), case when $4 then 1 else 0 end
+        from unnest($1::varchar[]) as empresa(id)
+        on conflict (id_empresa) do update set
+          id_usuario = excluded.id_usuario,
+          email = coalesce(excluded.email, dna_work.portal_empresa_acesso.email),
+          primeiro_login = coalesce(dna_work.portal_empresa_acesso.primeiro_login, now()),
+          ultimo_login = case when $4 then now() else dna_work.portal_empresa_acesso.ultimo_login end,
+          ultimo_uso = now(),
+          logins = dna_work.portal_empresa_acesso.logins + case when $4 then 1 else 0 end
+        where $4
+           or dna_work.portal_empresa_acesso.ultimo_uso is null
+           or dna_work.portal_empresa_acesso.ultimo_uso < now() - interval '5 minutes'
+      `, [empresas, usuarioId, email || null, entrada]);
+    } catch {
+      // O histórico de uso não pode derrubar o login nem a página.
+    }
+  }
+
+  private async garantirTabelaAcesso(): Promise<void> {
+    await this.db.query(`
+      create table if not exists dna_work.portal_empresa_acesso (
+        id_empresa varchar(40) primary key,
+        id_usuario varchar(40),
+        email varchar(255),
+        primeiro_login timestamptz,
+        ultimo_login timestamptz,
+        ultimo_uso timestamptz,
+        logins integer not null default 0
+      )
+    `);
   }
 
   private async montarSessao(usuario: UsuarioRow, empresaPreferida: string | null): Promise<SessaoEmpresa> {

@@ -111,7 +111,12 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
       await autenticarPonto(app, request);
       return;
     }
-    if (url.startsWith("/api/")) await app.authenticate(request);
+    if (url.startsWith("/api/")) {
+      await app.authenticate(request);
+      if (request.user.empresaId) {
+        await portal.registrarAcesso([request.user.empresaId], request.user.sub, request.user.email, false);
+      }
+    }
   });
 
   app.get("/health", async () => ({ ok: true, servico: "empresas" }));
