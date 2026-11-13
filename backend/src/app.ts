@@ -59,7 +59,7 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
     },
   });
   const portal = new PortalEmpresaService(db);
-  const dados = new PortalDadosService(db);
+  const dados = new PortalDadosService(db, { url: config.INTERNO_API_URL, token: config.SERVICE_TOKEN }, (mensagem, extra) => app.log.warn(extra ?? {}, mensagem));
   const ponto = new PontoColaboradorService(db);
   const cadastro = new CadastroPublicoService(db);
 
@@ -234,7 +234,7 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   app.get("/api/v1/empresa/feriados", async (request) => ({ success: true, data: await dados.feriados(request.user.sub, request.user.empresaId!) }));
   app.post("/api/v1/empresa/feriados", async (request) => ({ success: true, data: await dados.salvarFeriado(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
   app.post("/api/v1/empresa/colaboradores", async (request) => ({ success: true, data: await dados.salvarColaborador(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
-  app.post("/api/v1/empresa/vagas", async (request) => ({ success: true, data: await dados.salvarVaga(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
+  app.post("/api/v1/empresa/vagas", async (request) => ({ success: true, data: await dados.salvarVaga(request.user.sub, request.user.empresaId!, corpo(request.body), request.user.email) }));
   app.get("/api/v1/empresa/empresa", async (request) => ({ success: true, data: await dados.empresa(request.user.sub, request.user.empresaId!) }));
   app.post("/api/v1/empresa/filiais", async (request) => ({ success: true, data: await dados.salvarFilial(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
   app.get("/api/v1/empresa/usuarios", async (request) => ({ success: true, data: await dados.usuarios(request.user.sub, request.user.empresaId!) }));

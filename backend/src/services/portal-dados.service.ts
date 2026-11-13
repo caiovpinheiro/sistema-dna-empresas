@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { Pool } from "pg";
 import { AppError } from "../lib/errors.js";
+import { postServico } from "../lib/servico.js";
 
 function dia(valor: string | undefined) {
   const numero = Number(valor);
@@ -24,6 +25,58 @@ function valorLegado(entrada: string) {
   }
   if (!/^\d+(\.\d{1,2})?$/.test(valor)) return null;
   return Number(valor).toFixed(2).replace(".", ",");
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Código de "Ensino médio" em dna_work.flex: é o que o interno grava na vaga de estágio que aceita ensino médio. */
+const ESCOLARIDADE_ENSINO_MEDIO = "31";
+
+/** Mesmas regras da "Nova vaga" do interno, com mensagens por campo para o formulário do portal. */
+function validarVaga(body: Record<string, string>) {
+  const campos: Record<string, string> = {};
+  const texto = (chave: string, limite = 4000) => String(body[chave] ?? "").trim().slice(0, limite);
+  const hora = /^([01]\d|2[0-3]):[0-5]\d$/;
+  const tipo = Number(body.tipo);
+  if (tipo === 4) throw new AppError(422, "TIPO_INDISPONIVEL", "Não abrimos mais vaga PJ.");
+  if (![1, 2].includes(tipo)) throw new AppError(422, "TIPO_INVALIDO", "A vaga precisa ser estágio ou CLT.");
+  const cargo = texto("cargo", 180);
+  if (cargo.length < 2) campos.cargo = "Informe o cargo da vaga.";
+  const quantidade = Number(body.quantidade || 1);
+  if (!Number.isInteger(quantidade) || quantidade < 1 || quantidade > 20) campos.quantidade = "Use um número de 1 a 20.";
+  const salario = valorLegado(texto("salario", 40));
+  if (!salario) campos.salario = "Informe o valor só com números, como 1.500,00.";
+  const cargaHoraria = texto("cargaHoraria", 3);
+  if (!(tipo === 1 ? ["20", "30"] : ["40", "44"]).includes(cargaHoraria)) campos.cargaHoraria = tipo === 1 ? "Estágio usa 20 ou 30 horas por semana." : "CLT usa 40 ou 44 horas por semana.";
+  const entrada = texto("entrada", 5);
+  const saida = texto("saida", 5);
+  if (!hora.test(entrada)) campos.entrada = "Informe a entrada.";
+  if (!hora.test(saida)) campos.saida = "Informe a saída.";
+  let sabado: { entrada: string; saida: string } | null = null;
+  if (body.sabado === "sim") {
+    sabado = { entrada: texto("sabadoEntrada", 5), saida: texto("sabadoSaida", 5) };
+    if (!hora.test(sabado.entrada) || !hora.test(sabado.saida)) campos.sabado = "Informe a entrada e a saída do sábado.";
+  }
+  const sexo = ["M", "F", "I"].includes(body.sexo) ? body.sexo : "I";
+  const idade = Number(body.idade);
+  const idadeAte = Number(body.idadeAte);
+  if (!Number.isInteger(idade) || idade < 14 || idade > 80) campos.idade = "Idade de 14 a 80.";
+  if (!Number.isInteger(idadeAte) || idadeAte < 14 || idadeAte > 80) campos.idadeAte = "Idade de 14 a 80.";
+  else if (Number.isInteger(idade) && idadeAte < idade) campos.idadeAte = "Menor que a idade inicial.";
+  let aceitaMedio = false;
+  if (tipo === 1) {
+    if (body.aceitaMedio !== "sim" && body.aceitaMedio !== "nao") campos.aceitaMedio = "Diga se a vaga aceita estudante do ensino médio.";
+    aceitaMedio = body.aceitaMedio === "sim";
+  }
+  const atividades = texto("atividades");
+  const requisitos = texto("requisitos");
+  if (atividades.length < 3) campos.atividades = "Descreva o que a pessoa vai fazer.";
+  if (requisitos.length < 3) campos.requisitos = "Diga o que a pessoa precisa ter ou saber.";
+  const primeiro = Object.values(campos)[0];
+  if (primeiro) throw new AppError(422, "VALIDACAO", Object.keys(campos).length > 1 ? "Confira os campos marcados." : primeiro, campos);
+  return {
+    tipo, cargo, quantidade, salario: salario!, cargaHoraria, entrada, saida, sabado, sexo, idade, idadeAte, aceitaMedio,
+    atividades, requisitos, beneficios: texto("beneficios") || null,
+  };
 }
 
 function situacaoVaga(status: unknown) {
@@ -129,7 +182,12 @@ function saldoGravado(valor: string) {
 }
 
 export class PortalDadosService {
-  constructor(private readonly db: Pool) {}
+  constructor(
+    private readonly db: Pool,
+    /** Interno (INTERNO_API_URL + SERVICE_TOKEN): a vaga abre pelo mesmo fluxo da "Nova vaga" de lá. */
+    private readonly interno: { url: string; token: string } = { url: "", token: "" },
+    private readonly avisar: (mensagem: string, dados?: Record<string, unknown>) => void = () => undefined,
+  ) {}
 
   async painel(usuarioId: string, empresaId: string) {
     await this.garantir(usuarioId, empresaId);
@@ -234,15 +292,22 @@ export class PortalDadosService {
 
   async vagas(usuarioId: string, empresaId: string, busca: string) {
     await this.garantir(usuarioId, empresaId);
+    // A "Nova vaga" grava uma linha por posição com o mesmo comparador: aqui elas viram uma vaga só, por situação.
     const rows = await this.db.query(`
-      select v.id_vaga as id, coalesce(nullif(btrim(v.codigo::text), ''), v.comparador) as codigo, v.cargo, v.quantidade_posicoes as vagas, v.status, v.dataabertura, v.salario,
-             coalesce(nullif(btrim(v.cidade), ''), e.cidade) as cidade, v.periodo, m.descricao as contrato
+      select (array_agg(v.id_vaga order by v.id_vaga))[1] as id,
+             max(coalesce(nullif(btrim(v.codigo::text), ''), v.comparador)) as codigo,
+             max(v.cargo) as cargo, sum(coalesce(v.quantidade_posicoes, 1))::int as vagas, v.status,
+             max(v.dataabertura) as dataabertura, max(v.salario) as salario,
+             max(coalesce(nullif(btrim(v.cidade), ''), e.cidade)) as cidade, max(v.periodo) as periodo,
+             max(m.descricao) as contrato,
+             bool_or(v.tipo_vaga = 1 and v.escolaridade::text = '31') as aceita_medio
       from dna_work.vaga v
       join dna_work.empresa e on e.id_empresa = v.id_empresa
       left join dna_work.modalidade_vaga m on m.id = v.tipo_vaga
       where v.id_empresa = $1
         and ($2 = '' or v.cargo ilike $3)
-      order by v.dataabertura desc nulls last
+      group by coalesce(nullif(btrim(v.comparador), ''), v.id_vaga), v.status
+      order by max(v.dataabertura) desc nulls last
       limit 200
     `, [empresaId, busca, `%${busca}%`]);
     return rows.rows.map((row) => ({
@@ -391,37 +456,61 @@ export class PortalDadosService {
     }
   }
 
-  async salvarVaga(usuarioId: string, empresaId: string, body: Record<string, string>) {
+  /**
+   * Abre a vaga no interno (POST /api/v1/servico/vagas), que grava no Lightsail, em public.vaga e em dna_work.vaga
+   * como a "Nova vaga" de lá. Sem o interno configurado, ou com a empresa fora do cadastro novo do interno,
+   * grava só em dna_work.vaga (aparece em Vagas do interno, mas não na triagem).
+   */
+  async salvarVaga(usuarioId: string, empresaId: string, body: Record<string, string>, email = "") {
     await this.garantir(usuarioId, empresaId);
-    const tipo = Number(body.tipo);
-    if (tipo === 4) throw new AppError(422, "TIPO_INDISPONIVEL", "Não abrimos mais vaga PJ.");
-    if (![1, 2].includes(tipo)) throw new AppError(422, "TIPO_INVALIDO", "A vaga precisa ser estágio ou CLT.");
-    const texto = (chave: string, limite = 4000) => {
-      const valor = String(body[chave] ?? "").trim();
-      return valor ? valor.slice(0, limite) : null;
-    };
-    const cargo = texto("cargo", 200);
-    if (!cargo) throw new AppError(422, "VALIDACAO", "Informe o cargo da vaga.", { cargo: "Informe o cargo da vaga." });
-    const quantidade = body.quantidade ? Number(body.quantidade) : 1;
-    if (!Number.isInteger(quantidade) || quantidade < 1 || quantidade > 999) {
-      throw new AppError(422, "VALIDACAO", "A quantidade de vagas precisa ser um número de 1 a 999.", { quantidade: "Use um número de 1 a 999." });
-    }
-    const salarioTexto = texto("salario", 40);
-    const salario = salarioTexto ? valorLegado(salarioTexto) : null;
-    if (salarioTexto && salario === null) {
-      throw new AppError(422, "VALIDACAO", "Escreva o valor só com números, como 1.500,00.", { salario: "Escreva o valor só com números, como 1.500,00." });
+    const vaga = validarVaga(body);
+    if (this.interno.url && this.interno.token && UUID.test(empresaId)) {
+      const resposta = await postServico(this.interno.url, this.interno.token, "/api/v1/servico/vagas", {
+        empresa_id: empresaId,
+        tipo: vaga.tipo === 1 ? "estagio" : "clt",
+        quantidade: vaga.quantidade,
+        carga_horaria: vaga.cargaHoraria,
+        novo_cargo: { nome: vaga.cargo, descricao: vaga.atividades, requisitos: vaga.requisitos },
+        salario: vaga.salario,
+        horario_entrada: vaga.entrada,
+        horario_saida: vaga.saida,
+        ...(vaga.sabado ? { sab_entrada: vaga.sabado.entrada, sab_saida: vaga.sabado.saida } : {}),
+        sexo: vaga.sexo,
+        idade: vaga.idade,
+        idade_ate: vaga.idadeAte,
+        atividades: vaga.atividades,
+        beneficios: vaga.beneficios ?? undefined,
+        ...(vaga.tipo === 1 ? { aceita_ensino_medio: vaga.aceitaMedio } : {}),
+        usuario: email,
+      });
+      const dados = resposta.body?.data as { ids?: string[]; codigo?: string } | undefined;
+      if (resposta.status === 201 && dados?.ids?.length) return { id: dados.ids[0], codigo: dados.codigo ?? null, interno: true };
+      const codigo = resposta.body?.error?.code;
+      if (codigo !== "EMPRESA_FORA_DA_TELA") {
+        this.avisar("vaga: interno recusou ou não respondeu", { status: resposta.status, codigo, empresaId });
+        if (resposta.status === 422 && resposta.body?.error?.message) throw new AppError(422, "VALIDACAO", resposta.body.error.message);
+        throw new AppError(503, "INTERNO_INDISPONIVEL", "Não foi possível abrir a vaga agora. Nada foi gravado; tente de novo em instantes.");
+      }
+      this.avisar("vaga: empresa fora do cadastro novo do interno, gravando só em dna_work.vaga", { empresaId });
+    } else {
+      this.avisar("vaga: interno não configurado ou empresa sem UUID, gravando só em dna_work.vaga", { empresaId });
     }
     const id = crypto.randomUUID();
+    const texto = vaga.sabado
+      ? `Segunda a sexta, ${vaga.entrada} às ${vaga.saida}; sábado, ${vaga.sabado.entrada} às ${vaga.sabado.saida}`
+      : `${vaga.entrada} às ${vaga.saida}`;
     await this.db.query(`
       insert into dna_work.vaga
-        (id_vaga, id_empresa, cargo, tipo_vaga, salario, cidade, status, dataabertura, comparador, quantidade_posicoes,
-         texto_carga, carga_horaria, atribuicaoes, requisitos_desejaveis, beneficios_texto, obs, sexo, data_adicao)
-      values ($1,$2,$3,$4,$5,$6,0,$7,$1,$8,$9,$10,$11,$12,$13,$14,'I',now())
+        (id_vaga, id_empresa, cargo, tipo_vaga, salario, status, dataabertura, comparador, quantidade_posicoes,
+         texto_carga, horabase, hora_saida_base, carga_horaria, atribuicaoes, requisitos_desejaveis, beneficios_texto,
+         sexo, idade, idadeate, escolaridade, sede, publicar, faturar, km, data_adicao)
+      values ($1,$2,$3,$4,$5,0,$6,$1,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,10,1,'S','30',now())
     `, [
-      id, empresaId, cargo, tipo, salario, texto("cidade", 120), dataLegado(new Date().toISOString().slice(0, 10)), quantidade,
-      texto("horario", 300), texto("cargaHoraria", 120), texto("atividades"), texto("requisitos"), texto("beneficios"), texto("observacao"),
+      id, empresaId, vaga.cargo, vaga.tipo, vaga.salario, dataLegado(new Date().toISOString().slice(0, 10)), vaga.quantidade,
+      texto, vaga.entrada, vaga.saida, vaga.cargaHoraria, vaga.atividades, vaga.requisitos, vaga.beneficios,
+      vaga.sexo, String(vaga.idade), String(vaga.idadeAte), vaga.tipo === 1 && vaga.aceitaMedio ? ESCOLARIDADE_ENSINO_MEDIO : null,
     ]);
-    return { id };
+    return { id, codigo: null, interno: false };
   }
 
   async relatorioPonto(usuarioId: string, empresaId: string) {
@@ -949,8 +1038,13 @@ export class PortalDadosService {
 
   private async detalheVaga(empresaId: string, id: string) {
     const rows = await this.db.query(`
-      select v.comparador as codigo, v.cargo, m.descricao as modalidade, v.quantidade_posicoes, v.salario,
-             coalesce(nullif(btrim(v.cidade), ''), e.cidade) as cidade, v.periodo, v.dataabertura, v.dataencerramento, v.escolaridade, v.experiencia,
+      select coalesce(nullif(btrim(v.codigo::text), ''), v.comparador) as codigo, v.cargo, v.tipo_vaga,
+             m.descricao as modalidade, v.salario,
+             (select sum(coalesce(irma.quantidade_posicoes, 1))::int from dna_work.vaga irma
+               where irma.id_empresa = v.id_empresa and irma.status = v.status
+                 and coalesce(nullif(btrim(irma.comparador), ''), irma.id_vaga) = coalesce(nullif(btrim(v.comparador), ''), v.id_vaga)) as quantidade_posicoes,
+             coalesce(nullif(btrim(v.cidade), ''), e.cidade) as cidade, v.periodo, v.dataabertura, v.dataencerramento, v.escolaridade::text as escolaridade,
+             v.experiencia, v.sexo, v.idade, v.idadeate,
              v.atribuicaoes, coalesce(nullif(btrim(v.beneficios_texto), ''), v.beneficios) as beneficios, v.requisitos_desejaveis, v.carga_horaria, v.jornada, v.texto_carga, v.obs, v.responsavel, v.remoto, v.status
       from dna_work.vaga v
       join dna_work.empresa e on e.id_empresa = v.id_empresa
@@ -959,15 +1053,21 @@ export class PortalDadosService {
     `, [id, empresaId]);
     const linha = rows.rows[0];
     if (!linha) return null;
+    const estagio = Number(linha.tipo_vaga) === 1;
+    const medio = linha.escolaridade === ESCOLARIDADE_ENSINO_MEDIO;
+    const carga = linha.carga_horaria && /^\d+$/.test(String(linha.carga_horaria)) ? `${linha.carga_horaria} horas por semana` : linha.carga_horaria;
+    const idade = linha.idade && linha.idadeate ? `${linha.idade} a ${linha.idadeate} anos` : linha.idade ? `A partir de ${linha.idade} anos` : null;
     return ficha(linha.cargo, linha.modalidade, [
       ["Código", linha.codigo], ["Cargo", linha.cargo], ["Modalidade", linha.modalidade],
-      ["Vagas", linha.quantidade_posicoes], ["Salário", dinheiro(linha.salario)], ["Cidade", linha.cidade],
-      ["Período", linha.periodo], ["Jornada", linha.jornada || linha.texto_carga],
+      ["Posições", linha.quantidade_posicoes], [estagio ? "Bolsa-auxílio" : "Salário", dinheiro(linha.salario)], ["Cidade", linha.cidade],
+      ["Período", linha.periodo], ["Horário", linha.jornada || linha.texto_carga], ["Carga horária", carga],
+      ["Aceita ensino médio", estagio ? (medio ? "Sim" : "Não") : null],
+      ["Sexo", linha.sexo === "M" ? "Masculino" : linha.sexo === "F" ? "Feminino" : linha.sexo === "I" ? "Indiferente" : null],
+      ["Idade", idade],
       ["Situação", situacaoVaga(linha.status)],
       ["Abertura", linha.dataabertura], ["Encerramento", linha.dataencerramento],
-      ["Escolaridade", linha.escolaridade], ["Experiência", linha.experiencia],
-      ["Carga horária", linha.carga_horaria],
-      ["Atribuições", linha.atribuicaoes], ["Requisitos", linha.requisitos_desejaveis], ["Benefícios", linha.beneficios],
+      ["Experiência", linha.experiencia],
+      ["Atividades", linha.atribuicaoes], ["Requisitos", linha.requisitos_desejaveis], ["Benefícios", linha.beneficios],
       ["Remoto", linha.remoto === 1 || linha.remoto === "1" ? "Sim" : linha.remoto ? "Não" : null],
       ["Responsável", linha.responsavel], ["Observação", linha.obs],
     ]);

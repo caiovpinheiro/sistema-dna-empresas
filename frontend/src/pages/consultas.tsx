@@ -8,7 +8,7 @@ import { Alerta, Badge, CabecalhoPagina, Card, Empty, FiltroChips, Input, Resumo
 
 type Linha = Record<string, string | number | null>;
 export type Acesso = { href: string; label: string };
-export type VagaLinha = { id: string; codigo: string | null; cargo: string | null; contrato: string | null; vagas: number | string | null; salario: string | null; cidade: string | null; periodo: string | null; situacao: string; dataabertura: string | null };
+export type VagaLinha = { id: string; codigo: string | null; cargo: string | null; contrato: string | null; vagas: number | string | null; salario: string | null; cidade: string | null; periodo: string | null; situacao: string; dataabertura: string | null; aceita_medio?: boolean | null };
 type PainelDados = { empresa: string; cnpj: string; colaboradoresAtivos: number; vagasAbertas: number; contratos: number; batidasMes: number; pontoAtivo: boolean };
 
 const ICONES: Record<string, LucideIcon> = {
