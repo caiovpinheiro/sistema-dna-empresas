@@ -3,6 +3,14 @@ import { Link } from "react-router-dom";
 import { ApiError, api } from "../lib/api";
 
 type Modalidade = "clt" | "estagio";
+type NivelEnsino = "" | "medio" | "superior" | "ambos";
+
+const NIVEIS: Array<[Exclude<NivelEnsino, "">, string, string]> = [
+  ["medio", "Ensino médio", "Estudantes do ensino médio"],
+  ["superior", "Ensino superior", "Estudantes de faculdade"],
+  ["ambos", "Os dois", "Médio ou superior"],
+];
+const ROTULO_NIVEL: Record<Exclude<NivelEnsino, "">, string> = { medio: "Ensino médio", superior: "Ensino superior", ambos: "Ensino médio ou superior" };
 type Clausula = { titulo: string; texto: string };
 type Termos = {
   versao: string;
@@ -51,6 +59,7 @@ type Formulario = {
   cidade: string;
   uf: string;
   modalidade: Modalidade;
+  nivelEnsino: NivelEnsino;
   vaga: string;
   quantidade: string;
   salario: string;
@@ -68,7 +77,7 @@ type Formulario = {
 const VAZIO: Formulario = {
   cnpj: "", razao: "", fantasia: "", telefone: "", nome: "", cargo: "", email: "", telefoneResponsavel: "",
   cep: "", logradouro: "", numero: "", complemento: "", bairro: "", cidade: "", uf: "",
-  modalidade: "clt", vaga: "", quantidade: "1", salario: "", beneficios: "", jornada: "", endereco: "",
+  modalidade: "clt", nivelEnsino: "", vaga: "", quantidade: "1", salario: "", beneficios: "", jornada: "", endereco: "",
   cidadevaga: "", ufvaga: "", atividades: "", termos: false, poderes: false, website: "",
 };
 
@@ -152,6 +161,7 @@ function errosDoFormulario(form: Formulario, etapa: number): Record<string, stri
   }
   if (etapa === 2 || etapa === 3) {
     if (form.modalidade !== "clt" && form.modalidade !== "estagio") por("modalidade", "Escolha CLT ou estágio.");
+    if (form.modalidade === "estagio" && !form.nivelEnsino) por("nivelEnsino", "Escolha se o estágio é para ensino médio, superior ou os dois.");
     if (texto(form.vaga, 180).trim().length < 2) por("vaga", "Informe o cargo da vaga.");
     if (!/^\d{1,3}$/.test(form.quantidade) || Number(form.quantidade) < 1 || Number(form.quantidade) > 999) por("quantidade", "Informe a quantidade de 1 a 999.");
     if (!salarioValido(form.salario.trim())) por("salario", "Informe o salário ou a bolsa apenas com números, como 1.850,00.");
@@ -172,7 +182,7 @@ function prontidao(form: Formulario, etapa: number) {
   const chaves = etapa === 1
     ? ["cnpj", "razao", "telefone", "nome", "cargo", "email", "telefoneResponsavel", "cep", "logradouro", "numero", "bairro", "cidade", "uf"]
     : etapa === 2
-      ? ["vaga", "quantidade", "salario", "jornada", "endereco", "cidadevaga", "ufvaga", "atividades"]
+      ? [...(form.modalidade === "estagio" ? ["nivelEnsino"] : []), "vaga", "quantidade", "salario", "jornada", "endereco", "cidadevaga", "ufvaga", "atividades"]
       : ["termos", "poderes"];
   const erros = errosDoFormulario(form, etapa);
   const prontos = chaves.filter((chave) => !erros[chave]).length;
@@ -320,7 +330,7 @@ export function CadastroPage() {
             bairro: form.bairro, cidade: form.cidade, uf: form.uf,
           },
           vaga: {
-            modalidade: form.modalidade, cargo: form.vaga, quantidade: Number(form.quantidade), salario: form.salario,
+            modalidade: form.modalidade, ...(form.modalidade === "estagio" ? { nivelEnsino: form.nivelEnsino } : {}), cargo: form.vaga, quantidade: Number(form.quantidade), salario: form.salario,
             beneficios: form.beneficios, jornada: form.jornada, endereco: form.endereco, cidade: form.cidadevaga,
             uf: form.ufvaga, atividades: form.atividades,
           },
@@ -450,6 +460,19 @@ export function CadastroPage() {
                   <button type="button" className={segmento(form.modalidade === "clt")} onClick={() => definir("modalidade", "clt")}><b>Contratação CLT</b><small className="block font-normal text-[#6f6578]">Profissionais para sua equipe</small></button>
                   <button type="button" className={segmento(form.modalidade === "estagio")} onClick={() => definir("modalidade", "estagio")}><b>Estágio</b><small className="block font-normal text-[#6f6578]">Estudantes em formação</small></button>
                 </div>
+                {form.modalidade === "estagio" ? (
+                  <div className="mt-4 grid gap-2">
+                    <p className="text-sm font-semibold">Para quem é o estágio?<span className="text-rose-600"> *</span></p>
+                    <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Nível de ensino do estágio">
+                      {NIVEIS.map(([valor, rotulo, explicacao]) => (
+                        <button key={valor} type="button" role="radio" aria-checked={form.nivelEnsino === valor} className={segmento(form.nivelEnsino === valor)} onClick={() => definir("nivelEnsino", valor)}>
+                          <b>{rotulo}</b><small className="block font-normal text-[#6f6578]">{explicacao}</small>
+                        </button>
+                      ))}
+                    </div>
+                    {erros.nivelEnsino ? <span className="text-sm font-medium text-rose-600">{erros.nivelEnsino}</span> : null}
+                  </div>
+                ) : null}
                 <div className="mt-4 grid gap-4 sm:grid-cols-2">
                   <Campo label="Nome do cargo" obrigatorio erro={erros.vaga}><input className={entrada(erros.vaga)} maxLength={180} placeholder="Ex.: Operador de telemarketing" aria-label="Nome do cargo" value={form.vaga} onChange={(event) => definir("vaga", texto(event.target.value, 180))} /></Campo>
                   <Campo label="Quantidade de posições" obrigatorio erro={erros.quantidade}><input className={entrada(erros.quantidade)} inputMode="numeric" maxLength={3} aria-label="Quantidade de posições" value={form.quantidade} onChange={(event) => definir("quantidade", digitos(event.target.value, 3))} /></Campo>
@@ -473,7 +496,7 @@ export function CadastroPage() {
                 <Cabeca titulo="Tudo certo. Falta só conferir." texto="Revise a empresa, a vaga e as condições antes de concluir." />
                 <div className="mt-5 grid gap-3 sm:grid-cols-2">
                   <Resumo titulo="Sua empresa" linhas={[["Empresa", form.fantasia || form.razao], ["CNPJ", form.cnpj], ["Responsável", form.nome], ["E-mail de acesso", form.email]]} />
-                  <Resumo titulo="Sua primeira vaga" linhas={[["Cargo", form.vaga], ["Modalidade", form.modalidade === "clt" ? "Contratação CLT" : "Estágio"], ["Posições", form.quantidade], ["Localidade", `${form.cidadevaga}/${form.ufvaga}`]]} />
+                  <Resumo titulo="Sua primeira vaga" linhas={[["Cargo", form.vaga], ["Modalidade", form.modalidade === "clt" ? "Contratação CLT" : "Estágio"], ...(form.modalidade === "estagio" && form.nivelEnsino ? [["Nível de ensino", ROTULO_NIVEL[form.nivelEnsino]] as [string, string]] : []), ["Posições", form.quantidade], ["Localidade", `${form.cidadevaga}/${form.ufvaga}`]]} />
                 </div>
                 <div className="mt-4 rounded-2xl bg-[#f7f2fa] p-4 text-sm">
                   <h3 className="font-bold">{condicoes?.titulo ?? "Condições comerciais"}</h3>

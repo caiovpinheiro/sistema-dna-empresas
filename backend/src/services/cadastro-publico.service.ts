@@ -12,6 +12,8 @@ import {
   somenteDigitos,
   validarCadastro,
   type Modalidade,
+  escolaridadeDoNivel,
+  textoDoNivel,
 } from "../lib/cadastro-texto.js";
 
 const MENU = "9%34%35%37";
@@ -142,11 +144,11 @@ export class CadastroPublicoService {
         insert into dna_work.vaga (
           id_vaga, id_empresa, cargo, tipo_vaga, salario, cidade, status, dataabertura, comparador,
           quantidade_posicoes, beneficios, beneficios_texto, texto_carga, atribuicaoes, requisitos_desejaveis,
-          publicar, sexo, sede, codigo, data_adicao
+          publicar, sexo, sede, codigo, escolaridade, data_adicao
         ) values (
           $1,$2,$3,$4,$5,$6,0,$7,$8,
           $9,$10,$11,$12,$13,$14,
-          1,'I',10,$15, now()
+          1,'I',10,$15,$16, now()
         )
       `, [
         vagaId,
@@ -162,8 +164,10 @@ export class CadastroPublicoService {
         dados.vaga.beneficios || null,
         dados.vaga.jornada,
         dados.vaga.atividades,
-        dados.vaga.atividades.slice(0, 255),
+        // Estágio: a escolha de nível (médio, superior ou os dois) abre os requisitos, para a equipe ver no interno.
+        [textoDoNivel(dados.vaga.nivelEnsino), dados.vaga.atividades].filter(Boolean).join(" ").slice(0, 255),
         `P${Date.now().toString(36).slice(-8)}`.slice(0, 20),
+        escolaridadeDoNivel(dados.vaga.nivelEnsino),
       ]);
       await client.query(`
         insert into dna_work.vaga_endereco (comparador, logradouro, numero, complemento, bairro, cidade, uf, cep, empresa)

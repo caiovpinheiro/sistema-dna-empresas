@@ -3,6 +3,24 @@ export const TERMO_VERSAO = "2026-11-09";
 const UFS = new Set(["AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"]);
 
 export type Modalidade = "clt" | "estagio";
+/** Estágio: para quem cursa o ensino médio, o superior ou os dois. */
+export type NivelEnsino = "medio" | "superior" | "ambos";
+const NIVEIS: readonly NivelEnsino[] = ["medio", "superior", "ambos"];
+/** Código de "Ensino médio" em dna_work.flex: o interno lê como "a vaga de estágio aceita ensino médio". */
+export const ESCOLARIDADE_ENSINO_MEDIO = "31";
+
+/** dna_work.vaga.escolaridade: 31 quando o estágio aceita ensino médio (só médio ou os dois); vazio para só superior. */
+export function escolaridadeDoNivel(nivel: NivelEnsino | null): string | null {
+  return nivel === "medio" || nivel === "ambos" ? ESCOLARIDADE_ENSINO_MEDIO : null;
+}
+
+/** Frase que vai para os requisitos da vaga, para a equipe ver no interno a escolha exata. */
+export function textoDoNivel(nivel: NivelEnsino | null): string {
+  if (nivel === "medio") return "Estágio para estudantes do ensino médio.";
+  if (nivel === "superior") return "Estágio para estudantes do ensino superior.";
+  if (nivel === "ambos") return "Estágio para estudantes do ensino médio ou superior.";
+  return "";
+}
 
 export type Clausula = { titulo: string; texto: string };
 
@@ -59,6 +77,7 @@ export type EmpresaCadastro = {
 
 export type VagaCadastro = {
   modalidade: Modalidade;
+  nivelEnsino: NivelEnsino | null;
   cargo: string;
   quantidade: number;
   salario: string;
@@ -217,6 +236,10 @@ export function validarCadastro(body: unknown): { dados: CadastroValido | null; 
   const modalidade = textoBruto(vaga.modalidade).toLowerCase();
   if (modalidade.length > 10 || (modalidade !== "clt" && modalidade !== "estagio")) erros["vaga.modalidade"] = "Escolha CLT ou estágio.";
 
+  const nivelBruto = textoBruto(vaga.nivelEnsino).toLowerCase();
+  const nivelEnsino = modalidade === "estagio" && (NIVEIS as readonly string[]).includes(nivelBruto) ? nivelBruto as NivelEnsino : null;
+  if (modalidade === "estagio" && !nivelEnsino) erros["vaga.nivelEnsino"] = "Escolha se o estágio é para ensino médio, superior ou os dois.";
+
   const cargo = limitar(vaga.cargo, 180, "vaga.cargo", "O cargo da vaga");
   if (!erros["vaga.cargo"] && cargo.length < 2) erros["vaga.cargo"] = "Informe o cargo da vaga.";
 
@@ -276,6 +299,7 @@ export function validarCadastro(body: unknown): { dados: CadastroValido | null; 
       },
       vaga: {
         modalidade: modalidade as Modalidade,
+        nivelEnsino,
         cargo,
         quantidade,
         salario,
