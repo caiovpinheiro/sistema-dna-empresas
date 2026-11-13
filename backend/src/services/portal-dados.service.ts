@@ -12,6 +12,20 @@ function dataLegado(iso: string) {
   return ano && mes && dia ? `${ano}/${mes}/${dia}` : iso;
 }
 
+/** Valor em reais no formato do sistema antigo ("1500,00"). Aceita 1500, 1.500, 1.500,00 e R$ 1500,5. */
+function valorLegado(entrada: string) {
+  let valor = entrada.replace(/R\$|\s/gi, "");
+  if (!valor) return null;
+  if (valor.includes(",")) {
+    const [inteiro, centavos = ""] = valor.split(",");
+    valor = `${inteiro.replace(/\./g, "")}.${centavos}`;
+  } else if (/^\d{1,3}(\.\d{3})+$/.test(valor)) {
+    valor = valor.replace(/\./g, "");
+  }
+  if (!/^\d+(\.\d{1,2})?$/.test(valor)) return null;
+  return Number(valor).toFixed(2).replace(".", ",");
+}
+
 function situacaoVaga(status: unknown) {
   const codigo = Number(status);
   if ([0, 3, 4, 5, 9].includes(codigo)) return "Aberta";
@@ -221,7 +235,7 @@ export class PortalDadosService {
   async vagas(usuarioId: string, empresaId: string, busca: string) {
     await this.garantir(usuarioId, empresaId);
     const rows = await this.db.query(`
-      select v.id_vaga as id, v.comparador as codigo, v.cargo, v.quantidade_posicoes as vagas, v.status, v.dataabertura, v.salario,
+      select v.id_vaga as id, coalesce(nullif(btrim(v.codigo::text), ''), v.comparador) as codigo, v.cargo, v.quantidade_posicoes as vagas, v.status, v.dataabertura, v.salario,
              coalesce(nullif(btrim(v.cidade), ''), e.cidade) as cidade, v.periodo, m.descricao as contrato
       from dna_work.vaga v
       join dna_work.empresa e on e.id_empresa = v.id_empresa
@@ -382,12 +396,31 @@ export class PortalDadosService {
     const tipo = Number(body.tipo);
     if (tipo === 4) throw new AppError(422, "TIPO_INDISPONIVEL", "Não abrimos mais vaga PJ.");
     if (![1, 2].includes(tipo)) throw new AppError(422, "TIPO_INVALIDO", "A vaga precisa ser estágio ou CLT.");
+    const texto = (chave: string, limite = 4000) => {
+      const valor = String(body[chave] ?? "").trim();
+      return valor ? valor.slice(0, limite) : null;
+    };
+    const cargo = texto("cargo", 200);
+    if (!cargo) throw new AppError(422, "VALIDACAO", "Informe o cargo da vaga.", { cargo: "Informe o cargo da vaga." });
+    const quantidade = body.quantidade ? Number(body.quantidade) : 1;
+    if (!Number.isInteger(quantidade) || quantidade < 1 || quantidade > 999) {
+      throw new AppError(422, "VALIDACAO", "A quantidade de vagas precisa ser um número de 1 a 999.", { quantidade: "Use um número de 1 a 999." });
+    }
+    const salarioTexto = texto("salario", 40);
+    const salario = salarioTexto ? valorLegado(salarioTexto) : null;
+    if (salarioTexto && salario === null) {
+      throw new AppError(422, "VALIDACAO", "Escreva o valor só com números, como 1.500,00.", { salario: "Escreva o valor só com números, como 1.500,00." });
+    }
     const id = crypto.randomUUID();
     await this.db.query(`
       insert into dna_work.vaga
-        (id_vaga, id_empresa, cargo, tipo_vaga, salario, cidade, status, dataabertura, comparador, quantidade_posicoes)
-      values ($1,$2,$3,$4,$5,$6,0,$7,$1,1)
-    `, [id, empresaId, body.cargo, tipo, body.salario || null, body.cidade || null, dataLegado(new Date().toISOString().slice(0, 10))]);
+        (id_vaga, id_empresa, cargo, tipo_vaga, salario, cidade, status, dataabertura, comparador, quantidade_posicoes,
+         texto_carga, carga_horaria, atribuicaoes, requisitos_desejaveis, beneficios_texto, obs, sexo, data_adicao)
+      values ($1,$2,$3,$4,$5,$6,0,$7,$1,$8,$9,$10,$11,$12,$13,$14,'I',now())
+    `, [
+      id, empresaId, cargo, tipo, salario, texto("cidade", 120), dataLegado(new Date().toISOString().slice(0, 10)), quantidade,
+      texto("horario", 300), texto("cargaHoraria", 120), texto("atividades"), texto("requisitos"), texto("beneficios"), texto("observacao"),
+    ]);
     return { id };
   }
 
@@ -918,7 +951,7 @@ export class PortalDadosService {
     const rows = await this.db.query(`
       select v.comparador as codigo, v.cargo, m.descricao as modalidade, v.quantidade_posicoes, v.salario,
              coalesce(nullif(btrim(v.cidade), ''), e.cidade) as cidade, v.periodo, v.dataabertura, v.dataencerramento, v.escolaridade, v.experiencia,
-             v.atribuicaoes, v.beneficios, v.jornada, v.texto_carga, v.obs, v.responsavel, v.remoto, v.status
+             v.atribuicaoes, coalesce(nullif(btrim(v.beneficios_texto), ''), v.beneficios) as beneficios, v.requisitos_desejaveis, v.carga_horaria, v.jornada, v.texto_carga, v.obs, v.responsavel, v.remoto, v.status
       from dna_work.vaga v
       join dna_work.empresa e on e.id_empresa = v.id_empresa
       left join dna_work.modalidade_vaga m on m.id::text = v.tipo_vaga::text
@@ -933,7 +966,8 @@ export class PortalDadosService {
       ["Situação", situacaoVaga(linha.status)],
       ["Abertura", linha.dataabertura], ["Encerramento", linha.dataencerramento],
       ["Escolaridade", linha.escolaridade], ["Experiência", linha.experiencia],
-      ["Atribuições", linha.atribuicaoes], ["Benefícios", linha.beneficios],
+      ["Carga horária", linha.carga_horaria],
+      ["Atribuições", linha.atribuicaoes], ["Requisitos", linha.requisitos_desejaveis], ["Benefícios", linha.beneficios],
       ["Remoto", linha.remoto === 1 || linha.remoto === "1" ? "Sim" : linha.remoto ? "Não" : null],
       ["Responsável", linha.responsavel], ["Observação", linha.obs],
     ]);

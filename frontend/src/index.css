@@ -3,18 +3,43 @@
 @theme {
   --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
   --color-purple-brand: #6a4b84;
+  --color-ink: #1c1524;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  background: #f4f2f5;
-  color: #24182d;
+  background: #f3f1f7;
+  color: #1c1524;
   font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
 }
 
-button, a, input, select {
+button, a, input, select, textarea {
   font: inherit;
+}
+
+/* Mãozinha em tudo que é clicável (o Tailwind v4 deixa a seta padrão nos botões). */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+summary,
+select:not(:disabled),
+input[type="checkbox"]:not(:disabled),
+input[type="radio"]:not(:disabled),
+input[type="date"]:not(:disabled)::-webkit-calendar-picker-indicator,
+input[type="time"]:not(:disabled)::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+}
+button:disabled,
+select:disabled,
+input:disabled { cursor: not-allowed; }
+
+/* Retorno de clique: o botão afunda um pixel enquanto está pressionado. */
+.app-canvas button:not(:disabled):active,
+.app-canvas a.botao:active {
+  transform: translateY(1px) scale(0.98);
+  filter: brightness(0.94);
 }
 
 button, a {
@@ -269,19 +294,22 @@ button, a {
 
 .data-table th {
   padding: 0.7rem 1rem;
-  border-bottom: 1px solid #eadff0;
-  color: #7a6b86;
+  border-bottom: 1px solid #ddd6e6;
+  color: #6b6475;
   font-weight: 600;
   white-space: nowrap;
 }
 
 .data-table td {
   padding: 0.75rem 1rem;
-  border-bottom: 1px solid #f3eef5;
+  border-bottom: 1px solid #ebe7f0;
   vertical-align: middle;
 }
 
-.data-table tbody tr:hover { background: #fbf8fc; }
+.data-table tbody tr:last-child td { border-bottom: 0; }
+.data-table tbody tr:hover { background: #faf8fc; }
+.data-table a { color: #6d28d9; font-weight: 600; }
+.data-table a:hover { color: #4c1d95; text-decoration: underline; }
 
 @media (prefers-reduced-motion: reduce) {
   .nav-sub,
@@ -289,10 +317,12 @@ button, a {
   .login-ok,
   .login-ring { animation: none; }
   button, a, .press { transition: none; }
+  .app-canvas button:not(:disabled):active,
+  .app-canvas a.botao:active { transform: none; }
   .press:hover, .press:active { transform: none; }
 }
 
 :focus-visible {
-  outline: 2px solid #6a4b84;
+  outline: 2px solid #7c3aed;
   outline-offset: 2px;
 }

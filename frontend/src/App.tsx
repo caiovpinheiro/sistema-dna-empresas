@@ -1,12 +1,14 @@
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Briefcase, Building2, ChevronDown, Circle, Clock, Gauge, GraduationCap, LayoutDashboard, Lock, LogOut, Menu, Settings, User, Users, Wallet, X, type LucideIcon } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Briefcase, Building2, ChevronDown, Circle, Clock, Gauge, GraduationCap, LayoutDashboard, Lock, LogOut, Menu, Plus, Settings, User, Users, Wallet, X, type LucideIcon } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { CadastroPage } from "./pages/cadastro";
 import { Consulta, Faturas, Ficha, Inicio } from "./pages/consultas";
-import { CargaNova, ColaboradorNovo, ColaboradoresPonto, EscalaNova, FeriadoNovo, Formulario, Listagem, RelatorioPonto, RelatorioPontoColaborador, VagaNova } from "./pages/ponto";
+import { CargaNova, ColaboradorNovo, ColaboradoresPonto, EscalaNova, FeriadoNovo, Formulario, Listagem, RelatorioPonto, RelatorioPontoColaborador } from "./pages/ponto";
+import { VagaNova, VagasPage, linkAbrirVaga, type TipoVaga } from "./pages/vagas";
 import { PontoLoginPage, PontoPage } from "./pages/ponto-colaborador";
-import { Button, Card, Field, Input } from "./components/ui";
+import { Alerta, Button, CabecalhoPagina, Card, Empty, Field, Input, Skeleton, botao } from "./components/ui";
+import { iniciais } from "./lib/formato";
 import { FundoLiquido } from "./components/fundo-liquido";
 import { ApiError, api } from "./lib/api";
 
@@ -38,6 +40,21 @@ export function App() {
   );
 }
 
+/** Telas do portal. Qualquer outro caminho volta para o /dashboard. */
+const ROTAS = [
+  "/dashboard", "/colaboradores", "/colaboradores/novo", "/colaboradores/:id",
+  "/escalas", "/escalas/nova", "/escalas/:id", "/cargas", "/cargas/nova", "/cargas/:id",
+  "/feriados", "/feriados/novo", "/feriados/:id",
+  "/ponto/colaboradores", "/ponto/colaborador/:id", "/ponto/relatorio",
+  "/vagas", "/vagas/nova", "/vagas/:id", "/faturas", "/faturas/:id",
+  "/talentos", "/talentos/novo", "/talentos/:id",
+  "/relatorios/encaminhamentos", "/relatorios/encaminhamentos/:id", "/relatorios/documentos", "/relatorios/documentos/:id",
+  "/relatorios/seguro", "/relatorios/seguro/:id", "/relatorios/calendario", "/relatorios/calendario/:id",
+  "/avaliacoes", "/avaliacoes/:id", "/holerite", "/holerite/:id",
+  "/empresa", "/empresa/filial", "/usuarios", "/usuarios/novo", "/usuarios/:id",
+  "/contratados", "/contratados/:id", "/opcao",
+];
+
 function Protegido() {
   const sessao = useQuery({ queryKey: ["sessao-empresa"], queryFn: () => api<Sessao>("/api/v1/empresa/sessao") });
   if (sessao.isLoading) return <TelaCentral>Carregando sessão…</TelaCentral>;
@@ -46,51 +63,8 @@ function Protegido() {
   if (dados.mustChangePassword) return <SenhaPage />;
   return (
     <Routes>
-      <Route path="/" element={<Portal sessao={dados} />} />
-      <Route path="/colaboradores" element={<Portal sessao={dados} />} />
-      <Route path="/colaboradores/novo" element={<Portal sessao={dados} />} />
-      <Route path="/colaboradores/:id" element={<Portal sessao={dados} />} />
-      <Route path="/escalas" element={<Portal sessao={dados} />} />
-      <Route path="/escalas/nova" element={<Portal sessao={dados} />} />
-      <Route path="/escalas/:id" element={<Portal sessao={dados} />} />
-      <Route path="/cargas" element={<Portal sessao={dados} />} />
-      <Route path="/cargas/nova" element={<Portal sessao={dados} />} />
-      <Route path="/cargas/:id" element={<Portal sessao={dados} />} />
-      <Route path="/feriados" element={<Portal sessao={dados} />} />
-      <Route path="/feriados/novo" element={<Portal sessao={dados} />} />
-      <Route path="/feriados/:id" element={<Portal sessao={dados} />} />
-      <Route path="/ponto/colaboradores" element={<Portal sessao={dados} />} />
-      <Route path="/ponto/colaborador/:id" element={<Portal sessao={dados} />} />
-      <Route path="/ponto/relatorio" element={<Portal sessao={dados} />} />
-      <Route path="/vagas" element={<Portal sessao={dados} />} />
-      <Route path="/vagas/nova" element={<Portal sessao={dados} />} />
-      <Route path="/vagas/:id" element={<Portal sessao={dados} />} />
-      <Route path="/faturas" element={<Portal sessao={dados} />} />
-      <Route path="/faturas/:id" element={<Portal sessao={dados} />} />
-      <Route path="/talentos" element={<Portal sessao={dados} />} />
-      <Route path="/talentos/novo" element={<Portal sessao={dados} />} />
-      <Route path="/talentos/:id" element={<Portal sessao={dados} />} />
-      <Route path="/relatorios/encaminhamentos" element={<Portal sessao={dados} />} />
-      <Route path="/relatorios/encaminhamentos/:id" element={<Portal sessao={dados} />} />
-      <Route path="/relatorios/documentos" element={<Portal sessao={dados} />} />
-      <Route path="/relatorios/documentos/:id" element={<Portal sessao={dados} />} />
-      <Route path="/relatorios/seguro" element={<Portal sessao={dados} />} />
-      <Route path="/relatorios/seguro/:id" element={<Portal sessao={dados} />} />
-      <Route path="/relatorios/calendario" element={<Portal sessao={dados} />} />
-      <Route path="/relatorios/calendario/:id" element={<Portal sessao={dados} />} />
-      <Route path="/avaliacoes" element={<Portal sessao={dados} />} />
-      <Route path="/avaliacoes/:id" element={<Portal sessao={dados} />} />
-      <Route path="/holerite" element={<Portal sessao={dados} />} />
-      <Route path="/holerite/:id" element={<Portal sessao={dados} />} />
-      <Route path="/empresa" element={<Portal sessao={dados} />} />
-      <Route path="/empresa/filial" element={<Portal sessao={dados} />} />
-      <Route path="/usuarios" element={<Portal sessao={dados} />} />
-      <Route path="/usuarios/novo" element={<Portal sessao={dados} />} />
-      <Route path="/usuarios/:id" element={<Portal sessao={dados} />} />
-      <Route path="/contratados" element={<Portal sessao={dados} />} />
-      <Route path="/contratados/:id" element={<Portal sessao={dados} />} />
-      <Route path="/opcao" element={<Portal sessao={dados} />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
+      {ROTAS.map((rota) => <Route key={rota} path={rota} element={<Portal sessao={dados} />} />)}
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );
 }
@@ -105,112 +79,162 @@ function Portal({ sessao }: { sessao: Sessao }) {
   const atual = link ? achar(itens, link) : null;
   const { pathname, search } = useLocation();
   const empresa = sessao.empresas.find((item) => item.id === sessao.empresaId)?.nome;
-  const expandido = aberto || hover;
+  const tipos = tiposDeVaga(itens);
+  const abrirVaga = linkAbrirVaga(tipos);
+  const tipoUrl = new URLSearchParams(search).get("tipo") ?? "2";
+  const main = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    setAberto(false);
+    main.current?.scrollTo({ top: 0 });
+    window.scrollTo({ top: 0 });
+  }, [pathname, search]);
+
+  const nav = (expandido: boolean, fechar: () => void) => (
+    <nav className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 py-2" aria-label="Menu da empresa">
+      <ul className="grid gap-1">
+        <li>
+          <ItemLink href="/dashboard" label="Início" icone={LayoutDashboard} ativo={pathname === "/dashboard"} expandido={expandido} onNavigate={fechar} />
+        </li>
+        {menu.isLoading ? <li className="px-3 py-2 text-xs text-slate-500">{expandido ? "Carregando menu…" : ""}</li> : null}
+        {menu.isError && expandido ? <li className="px-3 py-2 text-xs text-rose-300">{menu.error instanceof ApiError ? menu.error.message : "Não foi possível carregar o menu."}</li> : null}
+        {itens.filter((item) => !(item.link && destinoDoLink(item.link) === "/dashboard")).map((item) => <Ramo key={item.id} item={item} ativo={link} expandido={expandido} onNavigate={fechar} />)}
+      </ul>
+    </nav>
+  );
 
   return (
-    <div className="flex min-h-dvh">
-      {aberto ? <button aria-label="Fechar menu" className="fixed inset-0 z-40 bg-[#24182d]/40 md:hidden" onClick={() => setAberto(false)} /> : null}
-      <aside
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
-        className={`${aberto ? "fixed inset-y-0 z-50 flex w-80" : "hidden"} flex-col overflow-x-hidden border-r border-[#efeaf2] bg-white text-[#1c1524] shadow-[inset_3px_0_0_#6a4b84] transition-[width] duration-300 ease-out md:static md:flex md:min-h-screen ${hover ? "md:w-80" : "md:w-[72px]"}`}
-      >
-        <div className={`flex items-center py-5 ${expandido ? "gap-3 px-5" : "justify-center px-2"}`}>
-          <img src="/logo-mono.png" alt="DNA Work" className={`shrink-0 object-contain ${expandido ? "h-10 w-16" : "h-8 w-12"}`} />
-          <div className={`overflow-hidden whitespace-nowrap transition-all duration-300 ${expandido ? "w-auto opacity-100" : "w-0 opacity-0"}`}>
-            <p className="text-[15px] font-semibold leading-5 text-[#1c1524]">Empresas</p>
+    <div className="app-canvas flex min-h-dvh bg-[#f3f1f7]">
+      {/* Computador: barra estreita que abre por cima do conteúdo ao passar o mouse. */}
+      <div className="relative hidden w-[76px] shrink-0 lg:block">
+        <aside
+          onMouseEnter={() => setHover(true)}
+          onMouseLeave={() => setHover(false)}
+          className={`fixed inset-y-0 left-0 z-40 flex flex-col overflow-x-hidden border-r border-white/10 bg-[#130d19] text-white transition-[width] duration-300 ease-out ${hover ? "w-72 shadow-2xl" : "w-[76px]"}`}
+        >
+          <Marca expandido={hover} />
+          {hover ? <div className="px-3 pb-2"><EmpresaSelect empresas={sessao.empresas} atual={sessao.empresaId} /></div> : null}
+          {nav(hover, () => setHover(false))}
+          <div className="border-t border-white/10 p-2">
+            <Sair compacto={!hover} />
+            {hover ? <p className="truncate px-3 pt-1 text-xs text-slate-500">{sessao.email}</p> : null}
           </div>
-          <button className={`rounded-xl p-2 hover:bg-black/5 md:hidden ${expandido ? "ml-auto" : "hidden"}`} aria-label="Fechar" onClick={() => setAberto(false)}><X size={18} /></button>
+        </aside>
+      </div>
+
+      {/* Celular e tablet: gaveta. */}
+      {aberto ? <button aria-label="Fechar menu" className="fixed inset-0 z-40 bg-[#130d19]/50 lg:hidden" onClick={() => setAberto(false)} /> : null}
+      <aside className={`fixed inset-y-0 left-0 z-50 w-80 max-w-[85vw] flex-col border-r border-white/10 bg-[#130d19] pb-[env(safe-area-inset-bottom)] text-white lg:hidden ${aberto ? "flex" : "hidden"}`}>
+        <div className="flex items-center justify-between pr-3">
+          <Marca expandido />
+          <button className="grid h-9 w-9 place-items-center rounded-lg text-slate-300 hover:bg-white/10" aria-label="Fechar menu" onClick={() => setAberto(false)}><X size={18} /></button>
         </div>
-        <div className={`overflow-hidden px-4 transition-all duration-300 ${expandido ? "max-h-28 opacity-100" : "max-h-0 opacity-0"}`}>
-          <p className="truncate text-sm text-neutral-500">{sessao.nome}</p>
-          <EmpresaSelect empresas={sessao.empresas} atual={sessao.empresaId} />
-        </div>
-        <nav className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 py-3" aria-label="Menu da empresa">
-          {menu.isLoading ? <p className="px-2 text-sm text-[#7a6b86]">Carregando menu…</p> : null}
-          {menu.isError ? <p className="px-2 text-sm">{menu.error instanceof ApiError ? menu.error.message : "Não foi possível carregar o menu."}</p> : null}
-          {!menu.isLoading && !menu.isError && itens.length === 0 ? <p className="px-2 text-sm text-[#7a6b86]">Nenhuma opção liberada para este usuário.</p> : null}
-          <ul className="grid gap-1">
-            {itens.map((item) => <Ramo key={item.id} item={item} ativo={link} expandido={expandido} onNavigate={() => setAberto(false)} />)}
-          </ul>
-        </nav>
-        <div className="p-2">
-          <Sair compacto={!expandido} />
+        <div className="px-3 pb-2"><EmpresaSelect empresas={sessao.empresas} atual={sessao.empresaId} /></div>
+        {nav(true, () => setAberto(false))}
+        <div className="border-t border-white/10 p-2">
+          <Sair />
+          <p className="truncate px-3 pt-1 text-xs text-slate-500">{sessao.email}</p>
         </div>
       </aside>
-      <div className="min-w-0 flex-1 bg-[#f4f2f5]">
-        <header className="sticky top-0 z-30 flex min-h-14 items-center gap-3 px-4 pt-[env(safe-area-inset-top)] md:px-8">
-          <button className="grid h-9 w-9 place-items-center rounded-lg hover:bg-white md:hidden" aria-label="Abrir menu" onClick={() => setAberto(true)}><Menu size={18} /></button>
-          <p className="min-w-0 flex-1 truncate text-sm text-[#6f6578]">{empresa}</p>
-          <p className="hidden truncate text-sm text-[#1c1524] sm:block">{sessao.nome}</p>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-30 flex min-h-14 items-center gap-3 border-b border-slate-200/80 bg-white/85 px-4 pt-[env(safe-area-inset-top)] backdrop-blur md:px-6">
+          <button className="grid h-9 w-9 place-items-center rounded-lg text-slate-600 hover:bg-slate-100 lg:hidden" aria-label="Abrir menu" onClick={() => setAberto(true)}><Menu size={18} /></button>
+          <p className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">{tituloDaRota(pathname, atual?.label)}</p>
+          <p className="hidden max-w-[40%] truncate text-sm text-slate-500 md:block">{empresa}</p>
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-violet-100 text-xs font-bold text-violet-800" title={sessao.nome}>{iniciais(sessao.nome)}</span>
         </header>
-        <main className="mx-auto w-full max-w-5xl overflow-x-hidden px-4 pb-[max(2.5rem,env(safe-area-inset-bottom))] md:px-8">
-          {pathname === "/colaboradores" ? <Consulta titulo="Colaboradores" caminho="/api/v1/empresa/colaboradores" filtroStatus linkNome={(linha) => linha.id_candidato ? `/colaboradores/${linha.id_candidato}` : null} colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "datainicio", titulo: "Contratação" }, { chave: "departamento", titulo: "Departamento" }, { chave: "cargo", titulo: "Cargo" }, { chave: "modalidade", titulo: "Modalidade" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+        <main ref={main} className="mx-auto w-full max-w-6xl flex-1 overflow-x-hidden px-4 pb-[max(2.5rem,env(safe-area-inset-bottom))] pt-5 md:px-6 md:pt-6">
+          <div key={pathname} className="motion-pop min-w-0">
+          {pathname === "/dashboard" ? <Inicio acessos={acessosLiberados(itens)} nome={sessao.nome} abrirVaga={abrirVaga} /> : null}
+          {pathname === "/colaboradores" ? <Consulta titulo="Colaboradores" descricao="Quem trabalha ou já trabalhou na empresa pela DNA Work. Clique no nome para ver a ficha." caminho="/api/v1/empresa/colaboradores" filtroStatus singular="colaborador" plural="colaboradores" acoes={temLink(itens, "cadastrar-colaborador.php") ? <Link to="/colaboradores/novo" className={botao("primary", "botao")}><Plus size={16} /> Cadastrar colaborador</Link> : null} linkNome={(linha) => linha.id_candidato ? `/colaboradores/${linha.id_candidato}` : null} colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "datainicio", titulo: "Contratação" }, { chave: "departamento", titulo: "Departamento" }, { chave: "cargo", titulo: "Cargo" }, { chave: "modalidade", titulo: "Modalidade" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
           {pathname === "/colaboradores/novo" ? <ColaboradorNovo /> : null}
-          {pathname === "/escalas" ? <Listagem titulo="Escalas" caminho="/api/v1/empresa/escalas" novo="/escalas/nova" linkNome={(linha) => linha.id ? `/escalas/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Escala" }, { chave: "segunda", titulo: "Segunda" }, { chave: "terca", titulo: "Terça" }, { chave: "quarta", titulo: "Quarta" }, { chave: "quinta", titulo: "Quinta" }, { chave: "sexta", titulo: "Sexta" }, { chave: "sabado", titulo: "Sábado" }, { chave: "domingo", titulo: "Domingo" }]} /> : null}
+          {pathname === "/escalas" ? <Listagem titulo="Escalas" descricao="Horários de cada dia da semana usados no ponto." caminho="/api/v1/empresa/escalas" novo="/escalas/nova" rotuloNovo="Nova escala" singular="escala" plural="escalas" linkNome={(linha) => linha.id ? `/escalas/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Escala" }, { chave: "segunda", titulo: "Segunda" }, { chave: "terca", titulo: "Terça" }, { chave: "quarta", titulo: "Quarta" }, { chave: "quinta", titulo: "Quinta" }, { chave: "sexta", titulo: "Sexta" }, { chave: "sabado", titulo: "Sábado" }, { chave: "domingo", titulo: "Domingo" }]} /> : null}
           {pathname === "/escalas/nova" ? <EscalaNova /> : null}
-          {pathname === "/cargas" ? <Listagem titulo="Cargas horárias" caminho="/api/v1/empresa/cargas" novo="/cargas/nova" linkNome={(linha) => linha.id ? `/cargas/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Carga horária" }, { chave: "tipo", titulo: "Tipo" }, { chave: "entrada", titulo: "Entrada" }, { chave: "saida_refeicao", titulo: "Saída refeição" }, { chave: "retorno_refeicao", titulo: "Retorno refeição" }, { chave: "saida", titulo: "Saída" }]} /> : null}
+          {pathname === "/cargas" ? <Listagem titulo="Cargas horárias" descricao="Entrada, intervalo e saída de cada jornada." caminho="/api/v1/empresa/cargas" novo="/cargas/nova" rotuloNovo="Nova carga horária" singular="carga horária" plural="cargas horárias" linkNome={(linha) => linha.id ? `/cargas/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Carga horária" }, { chave: "tipo", titulo: "Tipo" }, { chave: "entrada", titulo: "Entrada" }, { chave: "saida_refeicao", titulo: "Saída refeição" }, { chave: "retorno_refeicao", titulo: "Retorno refeição" }, { chave: "saida", titulo: "Saída" }]} /> : null}
           {pathname === "/cargas/nova" ? <CargaNova /> : null}
-          {pathname === "/feriados" ? <Listagem titulo="Feriados" caminho="/api/v1/empresa/feriados" novo="/feriados/novo" linkNome={(linha) => linha.id ? `/feriados/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "data", titulo: "Data" }]} /> : null}
+          {pathname === "/feriados" ? <Listagem titulo="Feriados" descricao="Dias sem expediente considerados no ponto." caminho="/api/v1/empresa/feriados" novo="/feriados/novo" rotuloNovo="Novo feriado" singular="feriado" plural="feriados" linkNome={(linha) => linha.id ? `/feriados/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "data", titulo: "Data" }]} /> : null}
           {pathname === "/feriados/novo" ? <FeriadoNovo /> : null}
           {pathname === "/ponto/colaboradores" ? <ColaboradoresPonto /> : null}
           {pathname.startsWith("/ponto/colaborador/") ? <RelatorioPontoColaborador id={decodeURIComponent(pathname.slice("/ponto/colaborador/".length))} /> : null}
           {pathname === "/ponto/relatorio" ? <RelatorioPonto /> : null}
-          {pathname === "/vagas/nova" && new URLSearchParams(search).get("tipo") !== "4" ? <VagaNova tipo={new URLSearchParams(search).get("tipo") ?? "2"} /> : null}
-          {pathname === "/talentos" ? <Listagem titulo="Banco de talentos" caminho="/api/v1/empresa/talentos" novo="/talentos/novo" linkNome={(linha) => linha.id ? `/talentos/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cidade", titulo: "Cidade" }, { chave: "bairro", titulo: "Bairro" }, { chave: "estado", titulo: "Estado" }, { chave: "ensino", titulo: "Ensino" }, { chave: "curso", titulo: "Curso" }, { chave: "datacadastro", titulo: "Cadastro" }]} /> : null}
+          {pathname === "/vagas/nova" && tipoUrl !== "4" ? <VagaNova key={tipoUrl} tipo={tipoUrl} tipos={tipos} /> : null}
+          {pathname === "/vagas/nova" && tipoUrl === "4" ? <Navigate to="/vagas" replace /> : null}
+          {pathname === "/talentos" ? <Listagem titulo="Banco de talentos" descricao="Pessoas cadastradas pela empresa para futuras vagas." caminho="/api/v1/empresa/talentos" novo="/talentos/novo" rotuloNovo="Cadastrar talento" singular="talento" plural="talentos" linkNome={(linha) => linha.id ? `/talentos/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cidade", titulo: "Cidade" }, { chave: "bairro", titulo: "Bairro" }, { chave: "estado", titulo: "Estado" }, { chave: "ensino", titulo: "Ensino" }, { chave: "curso", titulo: "Curso" }, { chave: "datacadastro", titulo: "Cadastro" }]} /> : null}
           {pathname === "/talentos/novo" ? <Formulario titulo="Cadastrar talento" destino="/api/v1/empresa/talentos" voltar="/talentos" campos={[["nome", "Nome", "text"], ["cpf", "CPF", "text"], ["email", "E-mail", "email"], ["celular", "Celular", "text"], ["cidade", "Cidade", "text"]]} /> : null}
-          {pathname === "/relatorios/encaminhamentos" ? <Listagem titulo="Candidatos encaminhados" caminho="/api/v1/empresa/encaminhamentos" novo="/vagas" linkNome={(linha) => linha.id ? `/relatorios/encaminhamentos/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Candidato" }, { chave: "cargo", titulo: "Vaga" }, { chave: "data", titulo: "Convocação" }, { chave: "data_entrevista", titulo: "Entrevista" }, { chave: "hora", titulo: "Hora" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
-          {pathname === "/relatorios/documentos" ? <Listagem titulo="Documentos" caminho="/api/v1/empresa/documentos" novo="/colaboradores" linkNome={(linha) => linha.id ? `/relatorios/documentos/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "documentos", titulo: "Contrato" }, { chave: "inicio", titulo: "Início" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
-          {pathname === "/relatorios/seguro" ? <Listagem titulo="Seguro de vida" caminho="/api/v1/empresa/seguro" novo="/colaboradores" linkNome={(linha) => linha.id ? `/relatorios/seguro/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "cpf", titulo: "CPF" }, { chave: "inicio", titulo: "Início" }, { chave: "fim", titulo: "Fim" }]} /> : null}
-          {pathname === "/relatorios/calendario" ? <Listagem titulo="Calendário" caminho="/api/v1/empresa/calendario" novo="/vagas" linkNome={(linha) => linha.id ? `/relatorios/calendario/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Compromisso" }, { chave: "cargo", titulo: "Vaga" }, { chave: "data", titulo: "Data" }, { chave: "hora", titulo: "Início" }, { chave: "termino", titulo: "Término" }]} /> : null}
-          {pathname === "/avaliacoes" ? <Listagem titulo="Avaliações" caminho="/api/v1/empresa/avaliacoes" novo="/colaboradores" linkNome={(linha) => linha.id ? `/avaliacoes/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "ciclo", titulo: "Ciclo" }, { chave: "area", titulo: "Área" }, { chave: "data", titulo: "Data" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
-          {pathname === "/holerite" ? <Listagem titulo="Holerites" caminho="/api/v1/empresa/holerites" novo="/colaboradores" linkNome={(linha) => linha.id ? `/holerite/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "competencia", titulo: "Competência" }, { chave: "bruto", titulo: "Bruto" }, { chave: "liquido", titulo: "Líquido" }]} /> : null}
-          {pathname === "/usuarios" ? <Listagem titulo="Usuários" caminho="/api/v1/empresa/usuarios" novo="/usuarios/novo" linkNome={(linha) => linha.id ? `/usuarios/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "email", titulo: "E-mail" }, { chave: "tipo", titulo: "Tipo" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
-          {pathname === "/usuarios/novo" ? <Formulario titulo="Cadastrar usuário" destino="/api/v1/empresa/usuarios" voltar="/usuarios" campos={[["nome", "Nome", "text"], ["email", "E-mail", "email"], ["telefone", "Telefone", "text"], ["senha", "Senha", "password"]]} /> : null}
+          {pathname === "/relatorios/encaminhamentos" ? <Listagem titulo="Candidatos encaminhados" descricao="Pessoas que a DNA Work enviou para entrevista nas vagas da empresa." caminho="/api/v1/empresa/encaminhamentos" singular="encaminhamento" plural="encaminhamentos" linkNome={(linha) => linha.id ? `/relatorios/encaminhamentos/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Candidato" }, { chave: "cargo", titulo: "Vaga" }, { chave: "data", titulo: "Convocação" }, { chave: "data_entrevista", titulo: "Entrevista" }, { chave: "hora", titulo: "Hora" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/relatorios/documentos" ? <Listagem titulo="Documentos" descricao="Contratos e documentos de cada colaborador." caminho="/api/v1/empresa/documentos" singular="documento" plural="documentos" linkNome={(linha) => linha.id ? `/relatorios/documentos/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "documentos", titulo: "Contrato" }, { chave: "inicio", titulo: "Início" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/relatorios/seguro" ? <Listagem titulo="Seguro de vida" descricao="Colaboradores cobertos pelo seguro e a vigência de cada um." caminho="/api/v1/empresa/seguro" singular="pessoa" plural="pessoas" linkNome={(linha) => linha.id ? `/relatorios/seguro/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "cpf", titulo: "CPF" }, { chave: "inicio", titulo: "Início" }, { chave: "fim", titulo: "Fim" }]} /> : null}
+          {pathname === "/relatorios/calendario" ? <Listagem titulo="Calendário" descricao="Entrevistas e compromissos marcados nas vagas." caminho="/api/v1/empresa/calendario" singular="compromisso" plural="compromissos" linkNome={(linha) => linha.id ? `/relatorios/calendario/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Compromisso" }, { chave: "cargo", titulo: "Vaga" }, { chave: "data", titulo: "Data" }, { chave: "hora", titulo: "Início" }, { chave: "termino", titulo: "Término" }]} /> : null}
+          {pathname === "/avaliacoes" ? <Listagem titulo="Avaliações" descricao="Avaliações de desempenho dos colaboradores." caminho="/api/v1/empresa/avaliacoes" singular="avaliação" plural="avaliações" linkNome={(linha) => linha.id ? `/avaliacoes/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "ciclo", titulo: "Ciclo" }, { chave: "area", titulo: "Área" }, { chave: "data", titulo: "Data" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/holerite" ? <Listagem titulo="Holerites" descricao="Folha de pagamento por colaborador e competência." caminho="/api/v1/empresa/holerites" singular="holerite" plural="holerites" linkNome={(linha) => linha.id ? `/holerite/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "competencia", titulo: "Competência" }, { chave: "bruto", titulo: "Bruto" }, { chave: "liquido", titulo: "Líquido" }]} /> : null}
+          {pathname === "/usuarios" ? <Listagem titulo="Usuários" descricao="Quem da empresa acessa este portal." caminho="/api/v1/empresa/usuarios" novo="/usuarios/novo" rotuloNovo="Novo usuário" singular="usuário" plural="usuários" linkNome={(linha) => linha.id ? `/usuarios/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "email", titulo: "E-mail" }, { chave: "tipo", titulo: "Tipo" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/usuarios/novo" ? <Formulario titulo="Cadastrar usuário" descricao="A pessoa entra no portal com o e-mail e a senha informados aqui." destino="/api/v1/empresa/usuarios" voltar="/usuarios" campos={[["nome", "Nome", "text"], ["email", "E-mail", "email"], ["telefone", "Telefone", "text"], ["senha", "Senha", "password"]]} /> : null}
           {pathname === "/empresa/filial" ? <Formulario titulo="Cadastrar filial" destino="/api/v1/empresa/filiais" voltar="/empresa" campos={[["nome", "Nome", "text"], ["cnpj", "CNPJ", "text"], ["email", "E-mail", "email"], ["cidade", "Cidade", "text"]]} /> : null}
           {pathname === "/empresa" ? <EmpresaDados /> : null}
           {pathname === "/faturas" ? <Faturas /> : null}
-          {pathname === "/vagas" ? <Consulta titulo="Vagas" caminho="/api/v1/empresa/vagas" linkColuna="cargo" linkNome={(linha) => linha.id ? `/vagas/${linha.id}` : null} colunas={[{ chave: "codigo", titulo: "Código" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Contrato" }, { chave: "vagas", titulo: "Vagas" }, { chave: "salario", titulo: "Faixa salarial" }, { chave: "cidade", titulo: "Cidade" }, { chave: "periodo", titulo: "Período" }, { chave: "situacao", titulo: "Situação" }, { chave: "dataabertura", titulo: "Abertura" }]} /> : null}
-          {pathname === "/contratados" ? <Consulta titulo="Contratados" caminho="/api/v1/empresa/contratados" linkNome={(linha) => linha.id ? `/contratados/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "inicio", titulo: "Contratação" }, { chave: "departamento", titulo: "Departamento" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Modalidade" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/vagas" ? <VagasPage tipos={tipos} /> : null}
+          {pathname === "/contratados" ? <Consulta titulo="Contratados" descricao="Todas as contratações feitas pela DNA Work para a empresa." caminho="/api/v1/empresa/contratados" singular="contratação" plural="contratações" linkNome={(linha) => linha.id ? `/contratados/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "inicio", titulo: "Contratação" }, { chave: "departamento", titulo: "Departamento" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Modalidade" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
           {telaInterna(pathname)}
-          {pathname === "/" ? <Inicio acessos={acessosLiberados(itens)} /> : null}
           {pathname === "/opcao" && link && !atual ? <Painel titulo="Opção não liberada" texto="Esta tela não faz parte das opções deste usuário." /> : null}
-          {pathname === "/opcao" && atual ? <Painel titulo={atual.label} texto="Esta opção ainda será ligada. O nome é o mesmo do portal que a empresa já usa." detalhe={atual.link ?? undefined} /> : null}
+          {pathname === "/opcao" && atual ? <Painel titulo={atual.label} texto="Esta opção ainda está sendo preparada no portal novo. Se precisar dela agora, fale com a DNA Work." /> : null}
+          </div>
         </main>
       </div>
     </div>
   );
 }
 
+function Marca({ expandido }: { expandido: boolean }) {
+  return (
+    <Link to="/dashboard" className={`flex items-center py-5 ${expandido ? "gap-3 px-4" : "justify-center px-2"}`} title="Início">
+      <img src="/logo-mono.png" alt="DNA Work" className={`shrink-0 object-contain ${expandido ? "h-9 w-16" : "h-8 w-12"}`} />
+      <span className={`overflow-hidden whitespace-nowrap transition-all duration-300 ${expandido ? "w-auto opacity-100" : "w-0 opacity-0"}`}>
+        <span className="block text-sm font-extrabold tracking-wide text-white">DNAWORK</span>
+        <span className="block text-xs text-slate-400">Portal da empresa</span>
+      </span>
+    </Link>
+  );
+}
+
+function ItemLink({ href, label, icone: Icone, ativo, expandido, onNavigate, nivel = 0 }: { href: string; label: string; icone: LucideIcon; ativo: boolean; expandido: boolean; onNavigate: () => void; nivel?: number }) {
+  return (
+    <Link to={href} onClick={onNavigate} title={label} aria-current={ativo ? "page" : undefined}
+      className={`relative flex h-10 items-center gap-3 rounded-lg px-2.5 text-[13px] font-semibold transition duration-150 ${ativo ? "bg-white/10 text-white" : "text-slate-300 hover:bg-white/[0.07] hover:text-white"}`}>
+      {ativo && nivel === 0 ? <span aria-hidden="true" className="absolute inset-y-2 left-0 w-[3px] rounded-full bg-violet-400" /> : null}
+      {nivel === 0 ? <Icone size={18} className={`shrink-0 ${ativo ? "text-violet-300" : ""}`} /> : <span className={`ml-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${ativo ? "bg-violet-300" : "bg-slate-500"}`} />}
+      <span className={`min-w-0 overflow-hidden whitespace-nowrap transition-all duration-300 ${expandido ? "max-w-56 opacity-100" : "max-w-0 opacity-0"}`}>{label}</span>
+    </Link>
+  );
+}
+
 function Ramo({ item, ativo, expandido, onNavigate, nivel = 0 }: { item: ItemMenu; ativo: string | null; expandido: boolean; onNavigate: () => void; nivel?: number }) {
-  const [open, setOpen] = useState(false);
   const { pathname, search } = useLocation();
+  const marcadoEm = (ramo: ItemMenu): boolean => {
+    if (ramo.link) {
+      const href = destinoDoLink(ramo.link);
+      if (href.startsWith("/opcao")) return ativo === ramo.link;
+      if (href.includes("?")) return pathname + search === href;
+      return pathname === href || (href !== "/" && pathname.startsWith(`${href}/`) && !ramo.children.length && !irmaoMaisExato(href, pathname));
+    }
+    return ramo.children.some(marcadoEm);
+  };
+  const [open, setOpen] = useState(() => !item.link && marcadoEm(item));
   const Icon = iconeDe(item.label);
-  useEffect(() => {
-    if (!expandido) setOpen(false);
-  }, [expandido]);
-  const texto = <span className={`overflow-hidden whitespace-nowrap transition-all duration-300 ${expandido ? "max-w-56 opacity-100" : "max-w-0 opacity-0"}`}>{item.label}</span>;
   if (item.link) {
-    const href = destinoDoLink(item.link);
-    const marcado = href.startsWith("/opcao") ? ativo === item.link : href.includes("?") ? pathname + search === href : pathname === href;
-    return (
-      <li>
-        <Link to={href} onClick={onNavigate} title={item.label} className={`flex h-9 items-center gap-3 rounded-md px-2.5 text-[13px] font-medium transition duration-150 ${marcado ? "bg-[#f4eef6] text-[#6a4b84]" : "text-[#3c3344] hover:bg-[#f7f5f8]"}`}>
-          {nivel === 0 ? <Icon size={18} className="shrink-0" /> : <span className="ml-1 h-1.5 w-1.5 shrink-0 rounded-full bg-current" />}
-          {texto}
-        </Link>
-      </li>
-    );
+    return <li><ItemLink href={destinoDoLink(item.link)} label={item.label} icone={Icon} ativo={marcadoEm(item)} expandido={expandido} onNavigate={onNavigate} nivel={nivel} /></li>;
   }
+  const temAtivo = marcadoEm(item);
   return (
     <li className="grid gap-1">
-      <button type="button" aria-expanded={open && expandido} title={item.label} onClick={() => setOpen((value) => !value)} className="flex h-9 w-full items-center gap-3 rounded-md px-2.5 text-[13px] font-medium text-[#3c3344] transition duration-150 hover:bg-[#f7f5f8]">
-        <Icon size={18} className="shrink-0" />
-        {texto}
-        <ChevronDown size={16} className={`ml-auto shrink-0 transition duration-200 ${expandido ? "" : "w-0 overflow-hidden opacity-0"} ${open ? "" : "-rotate-90"}`} />
+      <button type="button" aria-expanded={open && expandido} title={item.label} onClick={() => setOpen((value) => !value)}
+        className={`flex h-10 w-full items-center gap-3 rounded-lg px-2.5 text-[13px] font-semibold transition duration-150 hover:bg-white/[0.07] hover:text-white ${temAtivo ? "text-white" : "text-slate-300"}`}>
+        <Icon size={18} className={`shrink-0 ${temAtivo ? "text-violet-300" : ""}`} />
+        <span className={`min-w-0 overflow-hidden whitespace-nowrap text-left transition-all duration-300 ${expandido ? "max-w-56 opacity-100" : "max-w-0 opacity-0"}`}>{item.label}</span>
+        <ChevronDown size={16} className={`ml-auto shrink-0 transition duration-200 ${expandido ? "" : "w-0 opacity-0"} ${open ? "" : "-rotate-90"}`} />
       </button>
       {open && expandido ? (
-        <ul className="nav-sub grid gap-1 pl-4">
+        <ul className="nav-sub grid gap-0.5 pl-5">
           {item.children.map((filho) => <Ramo key={filho.id} item={filho} ativo={ativo} expandido={expandido} onNavigate={onNavigate} nivel={nivel + 1} />)}
         </ul>
       ) : null}
@@ -218,19 +242,28 @@ function Ramo({ item, ativo, expandido, onNavigate, nivel = 0 }: { item: ItemMen
   );
 }
 
+/** /vagas não fica marcado em /vagas/nova quando "Abrir vaga" também está no menu. */
+function irmaoMaisExato(href: string, pathname: string) {
+  return pathname.endsWith("/nova") || pathname.endsWith("/novo") || (href === "/empresa" && pathname === "/empresa/filial");
+}
+
 function EmpresaSelect({ empresas, atual }: { empresas: Empresa[]; atual: string }) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const trocar = useMutation({
     mutationFn: (empresaId: string) => api("/api/v1/empresa/sessao/empresa", { method: "POST", body: JSON.stringify({ empresaId }) }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["sessao-empresa"] });
-      await queryClient.invalidateQueries({ queryKey: ["menu-empresa"] });
+      await queryClient.invalidateQueries();
+      navigate("/dashboard");
     },
   });
-  if (empresas.length < 2) return null;
+  if (empresas.length < 2) {
+    const nome = empresas.find((empresa) => empresa.id === atual)?.nome ?? empresas[0]?.nome;
+    return nome ? <p className="truncate rounded-lg bg-white/5 px-3 py-2 text-xs font-semibold text-slate-300" title={nome}>{nome}</p> : null;
+  }
   return (
-    <select className="mt-2 h-10 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-800" value={atual} onChange={(event) => trocar.mutate(event.target.value)} aria-label="Empresa">
-      {empresas.map((empresa) => <option key={empresa.id} value={empresa.id}>{empresa.nome}</option>)}
+    <select className="h-10 w-full rounded-lg border border-white/10 bg-white/5 px-3 text-xs font-semibold text-slate-200 outline-none [color-scheme:dark] focus:ring-2 focus:ring-violet-400/40" value={atual} onChange={(event) => trocar.mutate(event.target.value)} aria-label="Empresa" disabled={trocar.isPending}>
+      {empresas.map((empresa) => <option key={empresa.id} value={empresa.id} className="bg-[#1c1524]">{empresa.nome}</option>)}
     </select>
   );
 }
@@ -252,7 +285,7 @@ function LoginPage() {
   });
   useEffect(() => {
     if (!entrou) return;
-    const timer = window.setTimeout(() => navigate("/"), 8000);
+    const timer = window.setTimeout(() => navigate("/dashboard"), 8000);
     return () => window.clearTimeout(timer);
   }, [entrou, navigate]);
   if (entrou) {
@@ -266,7 +299,7 @@ function LoginPage() {
             muted
             playsInline
             aria-label={`Login realizado, ${entrou}`}
-            onEnded={() => navigate("/")}
+            onEnded={() => navigate("/dashboard")}
           />
           <p className="mt-4 text-lg font-extrabold text-[#1c1524]">Login realizado</p>
           <p className="text-sm text-[#6f6578]">{entrou}</p>
@@ -313,19 +346,20 @@ function SenhaPage() {
   });
   return (
     <TelaCentral>
-      <Card className="w-full max-w-md p-8 hover:translate-y-0">
-        <h1 className="text-2xl font-extrabold">Atualize sua senha</h1>
-        <p className="mt-2 text-sm text-slate-500">O acesso da empresa pede uma senha nova, como no portal atual.</p>
+      <Card className="w-full max-w-md p-6 sm:p-8">
+        <span className="grid h-11 w-11 place-items-center rounded-xl bg-violet-50 text-violet-700"><Lock size={20} /></span>
+        <h1 className="mt-4 text-2xl font-extrabold tracking-tight text-ink">Crie uma senha nova</h1>
+        <p className="mt-1 text-sm text-slate-500">É o primeiro acesso ou a senha foi redefinida. Use pelo menos 6 caracteres.</p>
         <form className="mt-6 grid gap-4" onSubmit={(event) => {
           event.preventDefault();
           if (password !== confirma) { setErro("As senhas não conferem."); return; }
           setErro("");
           salvar.mutate();
         }}>
-          <Field label="Nova senha"><Input type="password" minLength={6} required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
-          <Field label="Confirmar"><Input type="password" minLength={6} required value={confirma} onChange={(event) => setConfirma(event.target.value)} /></Field>
-          {erro ? <p className="text-sm text-rose-600" role="alert">{erro}</p> : null}
-          <Button type="submit" disabled={salvar.isPending}>Salvar senha</Button>
+          <Field label="Nova senha"><Input type="password" autoComplete="new-password" minLength={6} required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
+          <Field label="Repita a senha"><Input type="password" autoComplete="new-password" minLength={6} required value={confirma} onChange={(event) => setConfirma(event.target.value)} /></Field>
+          {erro ? <Alerta>{erro}</Alerta> : null}
+          <Button type="submit" className="h-11" disabled={salvar.isPending}>{salvar.isPending ? "Salvando…" : "Salvar senha"}</Button>
         </form>
       </Card>
     </TelaCentral>
@@ -343,20 +377,19 @@ function Sair({ compacto = false }: { compacto?: boolean }) {
     },
   });
   return (
-    <button className="flex h-10 w-full items-center gap-3 rounded-lg px-2.5 text-[13px] font-semibold text-[#3d2c48] transition duration-150 hover:bg-white" onClick={() => sair.mutate()} title="Sair">
+    <button className="flex h-10 w-full items-center gap-3 rounded-lg px-2.5 text-[13px] font-semibold text-slate-300 transition duration-150 hover:bg-white/[0.07] hover:text-white" onClick={() => sair.mutate()} title="Sair">
       <LogOut size={18} className="shrink-0" />
       <span className={`overflow-hidden whitespace-nowrap transition-all duration-300 ${compacto ? "max-w-0 opacity-0" : "max-w-24 opacity-100"}`}>Sair</span>
     </button>
   );
 }
 
-function Painel({ titulo, texto, detalhe }: { titulo: string; texto: string; detalhe?: string }) {
+function Painel({ titulo, texto }: { titulo: string; texto: string }) {
   return (
-    <Card className="max-w-2xl">
-      <h2 className="text-2xl font-extrabold">{titulo}</h2>
-      <p className="mt-3 text-sm leading-6 text-slate-600">{texto}</p>
-      {detalhe ? <p className="acao acao-purple mt-4 inline-flex">{detalhe}</p> : null}
-    </Card>
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-5">
+      <CabecalhoPagina titulo={titulo} />
+      <Empty titulo="Em preparação" texto={texto} acao={<Link to="/dashboard" className={botao("secondary", "botao")}>Voltar ao início</Link>} />
+    </div>
   );
 }
 
@@ -378,28 +411,48 @@ function FundoRoxo({ children, className = "", papel }: { children: ReactNode; c
 function EmpresaDados() {
   const dados = useQuery({ queryKey: ["empresa-dados"], queryFn: () => api<{ nome: string; razao_social: string | null; cnpj: string | null; email: string | null; telefone: string | null; cidade: string | null; uf: string | null; responsavel: string | null; filiais: Array<{ nome: string; cnpj: string | null; cidade: string | null }> }>("/api/v1/empresa/empresa") });
   const empresa = dados.data?.data;
-  const navigate = useNavigate();
+  const campos: Array<[string, string | null | undefined]> = [
+    ["Razão social", empresa?.razao_social], ["CNPJ", empresa?.cnpj], ["Cidade", [empresa?.cidade, empresa?.uf].filter(Boolean).join("/")],
+    ["Telefone", empresa?.telefone], ["E-mail", empresa?.email], ["Responsável", empresa?.responsavel],
+  ];
   return (
-    <section className="grid gap-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-2xl font-extrabold">{empresa?.nome || "Empresa"}</h2>
-          <p className="text-sm text-slate-500">{[empresa?.razao_social, empresa?.cnpj, [empresa?.cidade, empresa?.uf].filter(Boolean).join("/"), empresa?.telefone, empresa?.email, empresa?.responsavel].filter(Boolean).join(" · ")}</p>
-        </div>
-        <button className="rounded-xl bg-[#5b21b6] px-4 py-2 text-sm font-bold text-white" onClick={() => navigate("/empresa/filial")}>Cadastrar filial</button>
-      </div>
-      <div className="overflow-x-auto rounded-2xl bg-white shadow-sm">
-        <table className="w-full text-left text-sm">
-          <thead className="text-xs uppercase text-slate-400"><tr><th className="px-4 py-3">Filial</th><th>CNPJ</th><th>Cidade</th></tr></thead>
-          <tbody>
-            {(empresa?.filiais ?? []).map((filial) => (
-              <tr key={filial.nome} className="border-t border-slate-100"><td className="px-4 py-3">{filial.nome}</td><td>{filial.cnpj || "—"}</td><td>{filial.cidade || "—"}</td></tr>
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-5">
+      <CabecalhoPagina titulo={empresa?.nome || "Empresa"} descricao="Dados cadastrais da empresa e das filiais." acoes={<Link to="/empresa/filial" className={botao("primary", "botao")}><Plus size={16} /> Cadastrar filial</Link>} />
+      {dados.isLoading ? <Skeleton className="h-40" /> : null}
+      {dados.isError ? <Alerta>{dados.error instanceof ApiError ? dados.error.message : "Não foi possível carregar os dados da empresa."}</Alerta> : null}
+      {empresa ? (
+        <Card className="p-0">
+          <dl className="grid sm:grid-cols-2 lg:grid-cols-3">
+            {campos.map(([rotulo, valor]) => (
+              <div key={rotulo} className="border-b border-slate-100 px-4 py-3">
+                <dt className="text-xs font-medium text-slate-500">{rotulo}</dt>
+                <dd className="mt-0.5 truncate text-sm font-semibold text-ink">{valor || "—"}</dd>
+              </div>
             ))}
-          </tbody>
-        </table>
-        {!dados.isLoading && (empresa?.filiais.length ?? 0) === 0 ? <p className="px-4 py-6 text-sm text-slate-500">Nenhuma filial cadastrada.</p> : null}
-      </div>
-    </section>
+          </dl>
+        </Card>
+      ) : null}
+      {empresa ? (
+        <section className="grid gap-3">
+          <h2 className="text-base font-bold text-ink">Filiais</h2>
+          {empresa.filiais.length ? (
+            <Card className="p-0">
+              <ul className="divide-y divide-slate-100">
+                {empresa.filiais.map((filial) => (
+                  <li key={`${filial.nome}-${filial.cnpj}`} className="flex items-center gap-3 px-4 py-3">
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-slate-100 text-slate-600"><Building2 size={16} /></span>
+                    <div className="min-w-0">
+                      <p className="truncate font-semibold text-ink">{filial.nome}</p>
+                      <p className="text-xs text-slate-500">{[filial.cnpj, filial.cidade].filter(Boolean).join(" · ") || "Sem CNPJ e cidade"}</p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          ) : <Empty titulo="Nenhuma filial cadastrada" texto="Cadastre as filiais para separar colaboradores e vagas por unidade." />}
+        </section>
+      ) : null}
+    </div>
   );
 }
 
@@ -423,7 +476,7 @@ function telaInterna(pathname: string) {
   ];
   for (const [regra, tipo, voltar] of regras) {
     const achou = pathname.match(regra);
-    if (achou?.[1]) return <Ficha caminho={`/api/v1/empresa/detalhe/${tipo}/${encodeURIComponent(achou[1])}`} voltar={voltar} />;
+    if (achou?.[1]) return <Ficha caminho={`/api/v1/empresa/detalhe/${tipo}/${encodeURIComponent(achou[1])}`} voltar={voltar} rotuloVoltar={tituloDaRota(voltar)} />;
   }
   return null;
 }
@@ -457,7 +510,7 @@ function acessosLiberados(itens: ItemMenu[]) {
 function destinoDoLink(link: string): string {
   const [base, query] = link.split("?");
   const tipo = new URLSearchParams(query ?? "").get("Tipo");
-  if (base === "principal.php") return "/";
+  if (base === "principal.php") return "/dashboard";
   if (base === "buscar-candidato-ponto.php") return "/ponto/colaboradores";
   if (base === "cadastrar-colaborador.php") return "/colaboradores/novo";
   if (base === "buscar-escala.php") return "/escalas";
@@ -510,4 +563,55 @@ function achar(itens: ItemMenu[], link: string): ItemMenu | null {
     if (filho) return filho;
   }
   return null;
+}
+
+function temLink(itens: ItemMenu[], arquivo: string): boolean {
+  return itens.some((item) => (item.link?.split("?")[0] === arquivo) || temLink(item.children, arquivo));
+}
+
+/** Modalidades de vaga que o menu deste usuário libera: 1 = estágio, 2 = CLT. */
+function tiposDeVaga(itens: ItemMenu[]): TipoVaga[] {
+  const tipos = new Set<TipoVaga>();
+  const visitar = (lista: ItemMenu[]) => {
+    for (const item of lista) {
+      if (item.link) {
+        const destino = destinoDoLink(item.link);
+        if (destino === "/vagas/nova?tipo=1") tipos.add("1");
+        if (destino === "/vagas/nova?tipo=2") tipos.add("2");
+      }
+      visitar(item.children);
+    }
+  };
+  visitar(itens);
+  return [...tipos].sort();
+}
+
+const TITULOS: Array<[RegExp, string]> = [
+  [/^\/dashboard$/, "Início"],
+  [/^\/vagas\/nova$/, "Abrir vaga"],
+  [/^\/vagas/, "Vagas"],
+  [/^\/colaboradores\/novo$/, "Cadastrar colaborador"],
+  [/^\/colaboradores/, "Colaboradores"],
+  [/^\/contratados/, "Contratados"],
+  [/^\/ponto\/relatorio$/, "Cartão ponto"],
+  [/^\/ponto/, "Ponto por colaborador"],
+  [/^\/escalas/, "Escalas"],
+  [/^\/cargas/, "Cargas horárias"],
+  [/^\/feriados/, "Feriados"],
+  [/^\/faturas/, "Faturas"],
+  [/^\/talentos/, "Banco de talentos"],
+  [/^\/relatorios\/encaminhamentos/, "Candidatos encaminhados"],
+  [/^\/relatorios\/documentos/, "Documentos"],
+  [/^\/relatorios\/seguro/, "Seguro de vida"],
+  [/^\/relatorios\/calendario/, "Calendário"],
+  [/^\/avaliacoes/, "Avaliações"],
+  [/^\/holerite/, "Holerites"],
+  [/^\/empresa\/filial$/, "Cadastrar filial"],
+  [/^\/empresa/, "Empresa"],
+  [/^\/usuarios/, "Usuários"],
+];
+
+function tituloDaRota(pathname: string, opcao?: string) {
+  if (pathname === "/opcao") return opcao ?? "Opção";
+  return TITULOS.find(([regra]) => regra.test(pathname))?.[1] ?? "Portal da empresa";
 }
