@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, api } from "../lib/api";
 
@@ -74,6 +74,11 @@ const VAZIO: Formulario = {
 
 const UFS = ["AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"];
 const ETAPAS = ["Sua empresa", "Primeira vaga", "Aceite dos termos"];
+const CAMPOS_EMPRESA = ["razao", "fantasia", "telefone", "cep", "logradouro", "numero", "complemento", "bairro", "cidade", "uf"] as const;
+
+// "pendente": só o CNPJ aparece. "encontrado": a Receita devolveu os dados e mostramos um resumo.
+// "manual": a consulta não achou a empresa (ou a pessoa quis corrigir) e todos os campos aparecem.
+type ModoEmpresa = "pendente" | "encontrado" | "manual";
 
 function digitos(valor: string, maximo: number) {
   return valor.replace(/\D/g, "").slice(0, maximo);
@@ -168,6 +173,23 @@ function errosDoFormulario(form: Formulario, etapa: number): Record<string, stri
   return erros;
 }
 
+function mesclarConsulta(atual: Formulario, dados: Consulta): Formulario {
+  return {
+    ...atual,
+    cnpj: dados.cnpj || atual.cnpj,
+    razao: dados.razao || atual.razao,
+    fantasia: dados.fantasia || atual.fantasia,
+    telefone: dados.telefone ? mascaraTelefone(dados.telefone) : atual.telefone,
+    cep: dados.cep || atual.cep,
+    logradouro: dados.logradouro || atual.logradouro,
+    numero: dados.numero || atual.numero,
+    complemento: dados.complemento || atual.complemento,
+    bairro: dados.bairro || atual.bairro,
+    cidade: dados.cidade || atual.cidade,
+    uf: dados.uf || atual.uf,
+  };
+}
+
 function prontidao(form: Formulario, etapa: number) {
   const chaves = etapa === 1
     ? ["cnpj", "razao", "telefone", "nome", "cargo", "email", "telefoneResponsavel", "cep", "logradouro", "numero", "bairro", "cidade", "uf"]
@@ -187,6 +209,9 @@ export function CadastroPage() {
   const [aviso, setAviso] = useState("");
   const [existe, setExiste] = useState(false);
   const [consultando, setConsultando] = useState(false);
+  const [modoEmpresa, setModoEmpresa] = useState<ModoEmpresa>("pendente");
+  const [faltando, setFaltando] = useState<string[]>([]);
+  const cnpjAtual = useRef("");
   const [enviando, setEnviando] = useState(false);
   const [termos, setTermos] = useState<Termos | null>(null);
   const [modal, setModal] = useState(false);
@@ -210,6 +235,9 @@ export function CadastroPage() {
   const atual = prontidao(form, Math.min(etapa, 3));
   const geral = etapa === 4 ? 100 : Math.round(((etapa - 1) + atual.percentual / 100) / 3 * 100);
   const condicoes = termos?.modalidades[form.modalidade];
+
+  const mostrar = (chave: string) => modoEmpresa === "manual" || (modoEmpresa === "encontrado" && faltando.includes(chave));
+  const camposVisiveis = CAMPOS_EMPRESA.some(mostrar);
 
   const enderecoEmpresa = useMemo(() => {
     const base = [form.logradouro.trim(), form.numero.trim()].filter(Boolean).join(", ");
@@ -239,35 +267,56 @@ export function CadastroPage() {
     }, 165);
   }
 
-  async function consultar() {
+  function trocarCnpj(valor: string) {
+    const mascarado = mascaraCnpj(valor);
+    if (digitos(mascarado, 14) === digitos(form.cnpj, 14)) {
+      definir("cnpj", mascarado);
+      return;
+    }
+    // CNPJ novo: some com os dados da consulta anterior e volta a mostrar só o CNPJ.
+    setExiste(false);
+    setModoEmpresa("pendente");
+    setFaltando([]);
     setAviso("");
-    if (!cnpjValido(form.cnpj)) {
+    setForm((atual) => ({ ...atual, ...Object.fromEntries(CAMPOS_EMPRESA.map((chave) => [chave, ""])), cnpj: mascarado }));
+    setErros({});
+    cnpjAtual.current = digitos(mascarado, 14);
+    if (cnpjValido(mascarado)) void consultar(mascarado);
+  }
+
+  async function consultar(cnpj = form.cnpj) {
+    setAviso("");
+    if (!cnpjValido(cnpj)) {
       setErros((atual) => ({ ...atual, cnpj: "Informe um CNPJ válido com 14 números." }));
       return;
     }
     setConsultando(true);
     try {
-      const resposta = await api<Consulta>(`/api/v1/publico/cadastro/cnpj/${digitos(form.cnpj, 14)}`);
+      const resposta = await api<Consulta>(`/api/v1/publico/cadastro/cnpj/${digitos(cnpj, 14)}`);
       const dados = resposta.data;
+      // A pessoa pode ter mudado o CNPJ enquanto a consulta rodava.
+      if (cnpjAtual.current !== digitos(cnpj, 14)) return;
+      setForm((atual) => mesclarConsulta(atual, dados));
       setExiste(dados.existe);
-      setForm((atual) => ({
-        ...atual,
-        cnpj: dados.cnpj || atual.cnpj,
-        razao: dados.razao || atual.razao,
-        fantasia: dados.fantasia || atual.fantasia,
-        telefone: dados.telefone ? mascaraTelefone(dados.telefone) : atual.telefone,
-        cep: dados.cep || atual.cep,
-        logradouro: dados.logradouro || atual.logradouro,
-        numero: dados.numero || atual.numero,
-        complemento: dados.complemento || atual.complemento,
-        bairro: dados.bairro || atual.bairro,
-        cidade: dados.cidade || atual.cidade,
-        uf: dados.uf || atual.uf,
-      }));
-      if (dados.existe) setAviso("Este CNPJ já está cadastrado. Use o acesso do portal ou fale com a DNA Work.");
-      else if (!dados.consulta) setAviso("Não foi possível consultar este CNPJ agora. Preencha os dados manualmente.");
+      if (dados.existe) {
+        setModoEmpresa("pendente");
+        setAviso("Este CNPJ já está cadastrado. Use o acesso do portal ou fale com a DNA Work.");
+        return;
+      }
+      if (dados.consulta && dados.razao) {
+        // Os campos da empresa ficam vazios enquanto só o CNPJ aparece, então basta validar o que veio da consulta.
+        const errosEmpresa = errosDoFormulario(mesclarConsulta(VAZIO, dados), 1);
+        setFaltando(CAMPOS_EMPRESA.filter((chave) => errosEmpresa[chave]));
+        setModoEmpresa("encontrado");
+      } else {
+        setModoEmpresa("manual");
+        setAviso(dados.consulta
+          ? "Não encontramos este CNPJ na Receita. Preencha os dados da empresa abaixo."
+          : "Não foi possível consultar este CNPJ agora. Preencha os dados da empresa abaixo.");
+      }
     } catch (error) {
-      setAviso(error instanceof ApiError ? error.message : "Não foi possível consultar o CNPJ.");
+      setModoEmpresa("manual");
+      setAviso(error instanceof ApiError ? error.message : "Não foi possível consultar o CNPJ. Preencha os dados da empresa abaixo.");
     } finally {
       setConsultando(false);
     }
@@ -285,8 +334,18 @@ export function CadastroPage() {
     event.preventDefault();
     setAviso("");
     if (etapa === 4) return;
+    if (etapa === 1 && modoEmpresa === "pendente") {
+      if (!existe) void consultar();
+      else setAviso("Este CNPJ já está cadastrado. Use o acesso do portal ou fale com a DNA Work.");
+      return;
+    }
     const encontrados = errosDoFormulario(form, etapa);
     setErros(encontrados);
+    if (etapa === 1 && modoEmpresa === "encontrado") {
+      // Erro num campo que está escondido no resumo: abre esse campo para a pessoa corrigir.
+      const escondidos = CAMPOS_EMPRESA.filter((chave) => encontrados[chave] && !faltando.includes(chave));
+      if (escondidos.length) setFaltando((atual) => [...atual, ...escondidos]);
+    }
     if (Object.keys(encontrados).length) {
       setAviso("Revise os campos destacados antes de continuar.");
       return;
@@ -414,32 +473,55 @@ export function CadastroPage() {
             <input className="absolute -left-[9999px] h-0 w-0" tabIndex={-1} autoComplete="off" aria-hidden="true" name="website" value={form.website} onChange={(event) => definir("website", event.target.value)} />
             {etapa === 1 ? (
               <section>
-                <Cabeca titulo="Vamos conhecer sua empresa" texto="Comece com os dados da empresa responsável pela contratação." />
+                <Cabeca titulo="Vamos conhecer sua empresa" texto={modoEmpresa === "pendente" ? "Informe o CNPJ. Buscamos os dados da empresa para você." : "Confira os dados da empresa e conte quem é o responsável pelo cadastro."} />
                 <div className="mt-5 grid gap-4 sm:grid-cols-2">
                   <Campo label="CNPJ" obrigatorio erro={erros.cnpj} className="sm:col-span-2">
-                    <div className="flex gap-2">
-                      <input className={entrada(erros.cnpj)} inputMode="numeric" autoComplete="off" maxLength={18} placeholder="00.000.000/0000-00" aria-label="CNPJ" value={form.cnpj} onChange={(event) => { setExiste(false); definir("cnpj", mascaraCnpj(event.target.value)); }} />
-                      <button type="button" className="h-11 shrink-0 rounded-xl bg-[#f3e8f5] px-3 text-sm font-bold text-[#6a4b84] disabled:opacity-50" disabled={consultando} onClick={() => void consultar()}>{consultando ? "Consultando…" : "Consultar"}</button>
-                    </div>
+                    <input className={entrada(erros.cnpj)} inputMode="numeric" autoComplete="off" autoFocus maxLength={18} placeholder="00.000.000/0000-00" aria-label="CNPJ" value={form.cnpj} onChange={(event) => trocarCnpj(event.target.value)} />
+                    {consultando ? <span className="text-xs font-normal text-[#8c7d95]" aria-live="polite">Buscando os dados da empresa…</span> : null}
                   </Campo>
-                  <Campo label="Razão social" obrigatorio erro={erros.razao}><input className={entrada(erros.razao)} maxLength={255} placeholder="Nome jurídico da empresa" aria-label="Razão social" value={form.razao} onChange={(event) => definir("razao", texto(event.target.value, 255))} /></Campo>
-                  <Campo label="Nome fantasia" erro={erros.fantasia}><input className={entrada()} maxLength={255} placeholder="Como sua empresa é conhecida" aria-label="Nome fantasia" value={form.fantasia} onChange={(event) => definir("fantasia", texto(event.target.value, 255))} /></Campo>
-                  <Campo label="Telefone comercial" obrigatorio erro={erros.telefone}><input className={entrada(erros.telefone)} inputMode="tel" autoComplete="tel" maxLength={15} placeholder="(11) 99999-9999" aria-label="Telefone comercial" value={form.telefone} onChange={(event) => definir("telefone", mascaraTelefone(event.target.value))} /></Campo>
-                  <Campo label="CEP" obrigatorio erro={erros.cep}><input className={entrada(erros.cep)} inputMode="numeric" autoComplete="postal-code" maxLength={9} placeholder="00000-000" aria-label="CEP" value={form.cep} onChange={(event) => definir("cep", mascaraCep(event.target.value))} /></Campo>
-                  <Campo label="Logradouro" obrigatorio erro={erros.logradouro} className="sm:col-span-2"><input className={entrada(erros.logradouro)} maxLength={255} autoComplete="address-line1" placeholder="Rua, avenida ou travessa" aria-label="Logradouro" value={form.logradouro} onChange={(event) => definir("logradouro", texto(event.target.value, 255))} /></Campo>
-                  <Campo label="Número" obrigatorio erro={erros.numero}><input className={entrada(erros.numero)} maxLength={10} placeholder="123 ou S/N" aria-label="Número" value={form.numero} onChange={(event) => definir("numero", texto(event.target.value, 10).toUpperCase())} /></Campo>
-                  <Campo label="Complemento"><input className={entrada()} maxLength={100} placeholder="Sala, conjunto ou andar" aria-label="Complemento" value={form.complemento} onChange={(event) => definir("complemento", texto(event.target.value, 100))} /></Campo>
-                  <Campo label="Bairro" obrigatorio erro={erros.bairro}><input className={entrada(erros.bairro)} maxLength={50} placeholder="Bairro" aria-label="Bairro" value={form.bairro} onChange={(event) => definir("bairro", texto(event.target.value, 50))} /></Campo>
-                  <Campo label="Cidade" obrigatorio erro={erros.cidade}><input className={entrada(erros.cidade)} maxLength={100} placeholder="São Paulo" aria-label="Cidade" value={form.cidade} onChange={(event) => definir("cidade", texto(event.target.value, 100))} /></Campo>
-                  <Campo label="UF" obrigatorio erro={erros.uf}><input className={entrada(erros.uf)} maxLength={2} placeholder="SP" aria-label="UF" value={form.uf} onChange={(event) => definir("uf", event.target.value.replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase())} /></Campo>
                 </div>
+                {modoEmpresa === "encontrado" ? (
+                  <div className="cadastro-stage-in mt-4 rounded-2xl border border-[#e7dff0] bg-[#f7f2fa] p-4 text-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <small className="text-[11px] font-bold tracking-wide text-[#2f7d4a]">✓ EMPRESA ENCONTRADA</small>
+                        <strong className="block text-base">{form.fantasia || form.razao}</strong>
+                        {form.fantasia && form.fantasia !== form.razao ? <span className="block text-[#6f6578]">{form.razao}</span> : null}
+                      </div>
+                      <button type="button" className="text-sm font-bold text-[#6a4b84] underline" onClick={() => { setModoEmpresa("manual"); setFaltando([]); }}>Corrigir dados</button>
+                    </div>
+                    <p className="mt-2 text-[#4c3d58]">{[enderecoEmpresa, form.complemento.trim(), [form.cidade, form.uf].filter(Boolean).join("/"), form.cep].filter(Boolean).join(" · ")}</p>
+                    {form.telefone && !faltando.includes("telefone") ? <p className="text-[#4c3d58]">{form.telefone}</p> : null}
+                  </div>
+                ) : null}
+                {modoEmpresa !== "pendente" && camposVisiveis ? (
+                  <>
+                    {modoEmpresa === "encontrado" ? <p className="mb-3 mt-6 text-sm font-bold text-[#6a4b84]">Complete o que a Receita não informou</p> : null}
+                    <div className={`cadastro-stage-in grid gap-4 sm:grid-cols-2 ${modoEmpresa === "manual" ? "mt-4" : ""}`}>
+                      {mostrar("razao") ? (<Campo label="Razão social" obrigatorio erro={erros.razao}><input className={entrada(erros.razao)} maxLength={255} placeholder="Nome jurídico da empresa" aria-label="Razão social" value={form.razao} onChange={(event) => definir("razao", texto(event.target.value, 255))} /></Campo>) : null}
+                      {mostrar("fantasia") ? (<Campo label="Nome fantasia" erro={erros.fantasia}><input className={entrada()} maxLength={255} placeholder="Como sua empresa é conhecida" aria-label="Nome fantasia" value={form.fantasia} onChange={(event) => definir("fantasia", texto(event.target.value, 255))} /></Campo>) : null}
+                      {mostrar("telefone") ? (<Campo label="Telefone comercial" obrigatorio erro={erros.telefone}><input className={entrada(erros.telefone)} inputMode="tel" autoComplete="tel" maxLength={15} placeholder="(11) 99999-9999" aria-label="Telefone comercial" value={form.telefone} onChange={(event) => definir("telefone", mascaraTelefone(event.target.value))} /></Campo>) : null}
+                      {mostrar("cep") ? (<Campo label="CEP" obrigatorio erro={erros.cep}><input className={entrada(erros.cep)} inputMode="numeric" autoComplete="postal-code" maxLength={9} placeholder="00000-000" aria-label="CEP" value={form.cep} onChange={(event) => definir("cep", mascaraCep(event.target.value))} /></Campo>) : null}
+                      {mostrar("logradouro") ? (<Campo label="Logradouro" obrigatorio erro={erros.logradouro} className="sm:col-span-2"><input className={entrada(erros.logradouro)} maxLength={255} autoComplete="address-line1" placeholder="Rua, avenida ou travessa" aria-label="Logradouro" value={form.logradouro} onChange={(event) => definir("logradouro", texto(event.target.value, 255))} /></Campo>) : null}
+                      {mostrar("numero") ? (<Campo label="Número" obrigatorio erro={erros.numero}><input className={entrada(erros.numero)} maxLength={10} placeholder="123 ou S/N" aria-label="Número" value={form.numero} onChange={(event) => definir("numero", texto(event.target.value, 10).toUpperCase())} /></Campo>) : null}
+                      {mostrar("complemento") ? (<Campo label="Complemento"><input className={entrada()} maxLength={100} placeholder="Sala, conjunto ou andar" aria-label="Complemento" value={form.complemento} onChange={(event) => definir("complemento", texto(event.target.value, 100))} /></Campo>) : null}
+                      {mostrar("bairro") ? (<Campo label="Bairro" obrigatorio erro={erros.bairro}><input className={entrada(erros.bairro)} maxLength={50} placeholder="Bairro" aria-label="Bairro" value={form.bairro} onChange={(event) => definir("bairro", texto(event.target.value, 50))} /></Campo>) : null}
+                      {mostrar("cidade") ? (<Campo label="Cidade" obrigatorio erro={erros.cidade}><input className={entrada(erros.cidade)} maxLength={100} placeholder="São Paulo" aria-label="Cidade" value={form.cidade} onChange={(event) => definir("cidade", texto(event.target.value, 100))} /></Campo>) : null}
+                      {mostrar("uf") ? (<Campo label="UF" obrigatorio erro={erros.uf}><input className={entrada(erros.uf)} maxLength={2} placeholder="SP" aria-label="UF" value={form.uf} onChange={(event) => definir("uf", event.target.value.replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase())} /></Campo>) : null}
+                    </div>
+                  </>
+                ) : null}
+                {modoEmpresa !== "pendente" ? (
+                <>
                 <p className="mb-3 mt-6 text-sm font-bold text-[#6a4b84]">Responsável pelo cadastro</p>
-                <div className="grid gap-4 sm:grid-cols-2">
+                <div className="cadastro-stage-in grid gap-4 sm:grid-cols-2">
                   <Campo label="Nome completo" obrigatorio erro={erros.nome}><input className={entrada(erros.nome)} maxLength={150} autoComplete="name" placeholder="Seu nome e sobrenome" aria-label="Nome completo" value={form.nome} onChange={(event) => definir("nome", texto(event.target.value, 150))} /></Campo>
                   <Campo label="Cargo na empresa" obrigatorio erro={erros.cargo}><input className={entrada(erros.cargo)} maxLength={80} placeholder="Ex.: Gerente de RH" aria-label="Cargo na empresa" value={form.cargo} onChange={(event) => definir("cargo", texto(event.target.value, 80))} /></Campo>
                   <Campo label="E-mail corporativo" obrigatorio erro={erros.email}><input className={entrada(erros.email)} type="email" inputMode="email" autoComplete="email" maxLength={255} placeholder="seunome@empresa.com.br" aria-label="E-mail corporativo" value={form.email} onChange={(event) => definir("email", texto(event.target.value, 255).replace(/\s/g, "").toLowerCase())} /></Campo>
                   <Campo label="Telefone do responsável" obrigatorio erro={erros.telefoneResponsavel}><input className={entrada(erros.telefoneResponsavel)} inputMode="tel" autoComplete="tel" maxLength={15} placeholder="(11) 99999-9999" aria-label="Telefone do responsável" value={form.telefoneResponsavel} onChange={(event) => definir("telefoneResponsavel", mascaraTelefone(event.target.value))} /></Campo>
                 </div>
+                </>
+                ) : null}
               </section>
             ) : null}
 
@@ -512,7 +594,7 @@ export function CadastroPage() {
             {etapa < 4 ? (
               <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
                 {etapa > 1 ? <button type="button" className="h-11 rounded-xl px-3 text-sm font-bold text-[#6a4b84]" onClick={() => ir(etapa - 1)}>Voltar</button> : <span className="text-sm text-[#8c7d95]">Dados tratados com segurança</span>}
-                <button className="h-11 rounded-xl bg-[#6a4b84] px-5 text-sm font-bold text-white disabled:opacity-60" disabled={enviando}>{etapa === 3 ? (enviando ? "Concluindo…" : "Concluir cadastro") : "Continuar"}</button>
+                <button className="h-11 rounded-xl bg-[#6a4b84] px-5 text-sm font-bold text-white disabled:opacity-60" disabled={enviando || (etapa === 1 && consultando)}>{etapa === 3 ? (enviando ? "Concluindo…" : "Concluir cadastro") : etapa === 1 && modoEmpresa === "pendente" ? (consultando ? "Consultando…" : "Buscar empresa") : "Continuar"}</button>
               </div>
             ) : null}
           </form>
