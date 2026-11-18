@@ -482,9 +482,8 @@ export class PortalDadosService {
         atividades: vaga.atividades,
         beneficios: vaga.beneficios ?? undefined,
         ...(vaga.tipo === 1 ? { aceita_ensino_medio: vaga.aceitaMedio } : {}),
-        // O interno grava "Portal empresa: <usuario>" em dna_work.log_diversos.usuario, que é varchar(40).
-        // Acima de 24 caracteres a gravação falha e o Easypanel troca o 502 do interno pela página "Service is not reachable".
-        usuario: email.slice(0, 24),
+        // O interno corta "Portal empresa: <usuario>" em 40 caracteres (log_diversos.usuario é varchar(40)).
+        usuario: email,
       });
       const dados = resposta.body?.data as { ids?: string[]; codigo?: string } | undefined;
       if (resposta.status === 201 && dados?.ids?.length) return { id: dados.ids[0], codigo: dados.codigo ?? null, interno: true };
