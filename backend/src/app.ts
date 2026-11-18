@@ -61,7 +61,10 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   const portal = new PortalEmpresaService(db);
   const dados = new PortalDadosService(db, { url: config.INTERNO_API_URL, token: config.SERVICE_TOKEN }, (mensagem, extra) => app.log.warn(extra ?? {}, mensagem));
   const ponto = new PontoColaboradorService(db);
-  const cadastro = new CadastroPublicoService(db);
+  const cadastro = new CadastroPublicoService(db, {
+    googleMapsKey: config.GOOGLE_MAPS_API_KEY,
+    avisar: (mensagem, extra) => app.log.warn(extra ?? {}, mensagem),
+  });
 
   app.setErrorHandler((error: unknown, request, reply) => {
     if (error instanceof AppError) {

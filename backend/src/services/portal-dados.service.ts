@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { Pool } from "pg";
 import { AppError } from "../lib/errors.js";
 import { postServico } from "../lib/servico.js";
+import { SEDE_DNA, USA_ASAAS, gravarValoresPadraoDaVaga, semAcento } from "../lib/empresa-interno.js";
 
 function dia(valor: string | undefined) {
   const numero = Number(valor);
@@ -481,7 +482,9 @@ export class PortalDadosService {
         atividades: vaga.atividades,
         beneficios: vaga.beneficios ?? undefined,
         ...(vaga.tipo === 1 ? { aceita_ensino_medio: vaga.aceitaMedio } : {}),
-        usuario: email,
+        // O interno grava "Portal empresa: <usuario>" em dna_work.log_diversos.usuario, que é varchar(40).
+        // Acima de 24 caracteres a gravação falha e o Easypanel troca o 502 do interno pela página "Service is not reachable".
+        usuario: email.slice(0, 24),
       });
       const dados = resposta.body?.data as { ids?: string[]; codigo?: string } | undefined;
       if (resposta.status === 201 && dados?.ids?.length) return { id: dados.ids[0], codigo: dados.codigo ?? null, interno: true };
@@ -496,20 +499,34 @@ export class PortalDadosService {
       this.avisar("vaga: interno não configurado ou empresa sem UUID, gravando só em dna_work.vaga", { empresaId });
     }
     const id = crypto.randomUUID();
+    // dna_work.vaga.comparador é varchar(30): o UUID (36) estourava a coluna. Mesmo formato do cadastro público.
+    const comparador = crypto.randomBytes(8).toString("hex");
     const texto = vaga.sabado
       ? `Segunda a sexta, ${vaga.entrada} às ${vaga.saida}; sábado, ${vaga.sabado.entrada} às ${vaga.sabado.saida}`
       : `${vaga.entrada} às ${vaga.saida}`;
-    await this.db.query(`
-      insert into dna_work.vaga
-        (id_vaga, id_empresa, cargo, tipo_vaga, salario, status, dataabertura, comparador, quantidade_posicoes,
-         texto_carga, horabase, hora_saida_base, carga_horaria, atribuicaoes, requisitos_desejaveis, beneficios_texto,
-         sexo, idade, idadeate, escolaridade, sede, publicar, faturar, km, data_adicao)
-      values ($1,$2,$3,$4,$5,0,$6,$1,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,10,1,'S','30',now())
-    `, [
-      id, empresaId, vaga.cargo, vaga.tipo, vaga.salario, dataLegado(new Date().toISOString().slice(0, 10)), vaga.quantidade,
-      texto, vaga.entrada, vaga.saida, vaga.cargaHoraria, vaga.atividades, vaga.requisitos, vaga.beneficios,
-      vaga.sexo, String(vaga.idade), String(vaga.idadeAte), vaga.tipo === 1 && vaga.aceitaMedio ? ESCOLARIDADE_ENSINO_MEDIO : null,
-    ]);
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`
+        insert into dna_work.vaga
+          (id_vaga, id_empresa, cargo, tipo_vaga, salario, status, dataabertura, comparador, quantidade_posicoes,
+           texto_carga, horabase, hora_saida_base, carga_horaria, atribuicaoes, requisitos_desejaveis, beneficios_texto,
+           sexo, idade, idadeate, escolaridade, sede, publicar, faturar, km, data_adicao)
+        values ($1,$2,$3,$4,$5,0,$6,$19,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$20,1,'S','30',now())
+      `, [
+        id, empresaId, vaga.cargo, vaga.tipo, vaga.salario, dataLegado(new Date().toISOString().slice(0, 10)), vaga.quantidade,
+        texto, vaga.entrada, vaga.saida, vaga.cargaHoraria, vaga.atividades, vaga.requisitos.slice(0, 255), vaga.beneficios,
+        vaga.sexo, String(vaga.idade), String(vaga.idadeAte), vaga.tipo === 1 && vaga.aceitaMedio ? ESCOLARIDADE_ENSINO_MEDIO : null,
+        comparador, SEDE_DNA,
+      ]);
+      await gravarValoresPadraoDaVaga(client, comparador);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
     return { id, codigo: null, interno: false };
   }
 
@@ -742,10 +759,17 @@ export class PortalDadosService {
   async salvarFilial(usuarioId: string, empresaId: string, body: Record<string, string>) {
     await this.garantir(usuarioId, empresaId);
     const id = crypto.randomUUID();
+    const nome = (body.nome ?? "").trim().slice(0, 255);
+    if (nome.length < 2) throw new AppError(422, "NOME_CURTO", "Informe o nome da filial.");
+    // Toda empresa do portal leva sede 10 e usa_asaas 1. A filial não tem endereço no formulário, então não vai para
+    // public.empresa (sem latitude/longitude); o faturamento a agrupa pela matriz.
     await this.db.query(`
-      insert into dna_work.empresa (id_empresa, nome_fantasia, razao_social, cnpj, email, cidade, matriz, tipo_empresa, status)
-      values ($1,$2,$2,$3,$4,$5,$6,2,1)
-    `, [id, body.nome, body.cnpj || null, body.email || null, body.cidade || null, empresaId]);
+      insert into dna_work.empresa (
+        id_empresa, nome_fantasia, razao_social, cnpj, email, cidade, matriz, tipo_empresa, status,
+        sede, usa_asaas, usa_agente, razao_sem_acento, fantasia_sem_acento
+      )
+      values ($1,$2,$2,$3,$4,$5,$6,2,1,$7,$8,1,$9,$9)
+    `, [id, nome, body.cnpj || null, body.email || null, body.cidade || null, empresaId, SEDE_DNA, USA_ASAAS, semAcento(nome)]);
     return { id };
   }
 

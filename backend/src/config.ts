@@ -17,6 +17,8 @@ const envSchema = z.object({
     .transform((value) => value === "true"),
   INTERNO_API_URL: z.string().optional().default(""),
   SERVICE_TOKEN: z.string().optional().default(""),
+  /** Mesma chave do interno (Geocoding API). Só no servidor. Sem ela, empresa nova fica pendente de grupo. */
+  GOOGLE_MAPS_API_KEY: z.string().optional().default(""),
 });
 
 export type EmpresaConfig = z.infer<typeof envSchema> & {
