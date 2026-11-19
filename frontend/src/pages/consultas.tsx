@@ -312,7 +312,13 @@ export function Faturas() {
   );
 }
 
-export function Ficha({ caminho, voltar, rotuloVoltar = "Voltar" }: { caminho: string; voltar: string; rotuloVoltar?: string }) {
+export function Ficha({ caminho, voltar, rotuloVoltar = "Voltar", acao }: {
+  caminho: string;
+  voltar: string;
+  rotuloVoltar?: string;
+  /** Botões no cabeçalho da ficha, a partir da situação do registro (ex.: cancelar vaga aberta). */
+  acao?: (situacao: string | undefined) => ReactNode;
+}) {
   const ficha = useQuery({ queryKey: [caminho], queryFn: () => api<{ titulo: string; subtitulo: string; campos: Array<{ rotulo: string; valor: string }> }>(caminho) });
   const navigate = useNavigate();
   const bruto = ficha.data?.data;
@@ -328,7 +334,7 @@ export function Ficha({ caminho, voltar, rotuloVoltar = "Voltar" }: { caminho: s
       {ficha.isError ? <Alerta>{ficha.error instanceof ApiError ? ficha.error.message : "Não foi possível abrir este registro."}</Alerta> : null}
       {dados ? (
         <>
-          <CabecalhoPagina titulo={dados.titulo || "Registro"}>
+          <CabecalhoPagina titulo={dados.titulo || "Registro"} acoes={acao?.(situacao)}>
             <div className="flex flex-wrap items-center gap-2">
               {dados.subtitulo ? <Badge value={dados.subtitulo}>{dados.subtitulo}</Badge> : null}
               {situacao && situacao !== "—" ? <Badge value={situacao}>{situacao}</Badge> : null}

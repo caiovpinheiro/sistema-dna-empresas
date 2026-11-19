@@ -31,6 +31,10 @@ function valorLegado(entrada: string) {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Código de "Ensino médio" em dna_work.flex: é o que o interno grava na vaga de estágio que aceita ensino médio. */
 const ESCOLARIDADE_ENSINO_MEDIO = "31";
+/** Códigos de status (sistema antigo) que a empresa pode cancelar: 0 aberta, 3 em análise, 5 liberar vaga, 8 pausada, 9 processo de venda. */
+const STATUS_CANCELAVEL = [0, 3, 5, 8, 9];
+/** 6 = cancelada, o código que a edição do interno grava para "fechada". */
+const STATUS_CANCELADA = 6;
 
 /** Mesmas regras da "Nova vaga" do interno, com mensagens por campo para o formulário do portal. */
 function validarVaga(body: Record<string, string>) {
@@ -527,6 +531,51 @@ export class PortalDadosService {
       client.release();
     }
     return { id, codigo: null, interno: false };
+  }
+
+  /**
+   * Cancela a vaga como a edição do interno faz: status 6 ("cancelada", situação Fechada) em dna_work.vaga, em todas as
+   * posições da vaga (mesmo comparador). A triagem do interno tira a vaga de public.vaga na próxima busca.
+   * Só vaga aberta ou pausada: 4 (confecção de contrato) e 1 (contratada) mexem em contratação e faturamento.
+   */
+  async cancelarVaga(usuarioId: string, empresaId: string, idVaga: string, email = "") {
+    await this.garantir(usuarioId, empresaId);
+    const atual = await this.db.query<{ comparador: string | null; status: number | null }>(
+      "select comparador, status from dna_work.vaga where id_vaga = $1 and id_empresa = $2",
+      [idVaga, empresaId],
+    );
+    const vaga = atual.rows[0];
+    if (!vaga) throw new AppError(404, "VAGA_NAO_ENCONTRADA", "Vaga não encontrada.");
+    const status = Number(vaga.status);
+    if (status === 4) throw new AppError(409, "VAGA_EM_CONTRATO", "Esta vaga já está com contrato em preparação. Fale com a DNA Work para cancelar.");
+    if (!STATUS_CANCELAVEL.includes(status)) throw new AppError(409, "VAGA_NAO_ABERTA", "Só dá para cancelar vaga aberta ou pausada.");
+    const hoje = dataLegado(dataSp(0));
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+      const canceladas = await client.query<{ id_vaga: string }>(`
+        update dna_work.vaga
+        set status = $4, dataencerramento = $5, data_status = $5
+        where id_empresa = $1
+          and coalesce(nullif(btrim(comparador), ''), id_vaga) = coalesce(nullif(btrim($2::text), ''), $3::text)
+          and status = any($6::int[])
+        returning id_vaga
+      `, [empresaId, vaga.comparador, idVaga, STATUS_CANCELADA, hoje, STATUS_CANCELAVEL]);
+      for (const linha of canceladas.rows) {
+        // log_diversos: usuario e acao são varchar(40).
+        await client.query(
+          "insert into dna_work.log_diversos (usuario, id_empresa, id_vaga, acao, data) values ($1,$2,$3,$4, now())",
+          [`Portal empresa: ${email}`.slice(0, 40), empresaId, linha.id_vaga, "Vaga cancelada Portal empresa"],
+        );
+      }
+      await client.query("COMMIT");
+      return { canceladas: canceladas.rowCount ?? 0 };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async relatorioPonto(usuarioId: string, empresaId: string) {

@@ -5,7 +5,7 @@ import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate,
 import { CadastroPage } from "./pages/cadastro";
 import { Consulta, Faturas, Ficha, Inicio } from "./pages/consultas";
 import { CargaNova, ColaboradorNovo, ColaboradoresPonto, EscalaNova, FeriadoNovo, Formulario, Listagem, RelatorioPonto, RelatorioPontoColaborador } from "./pages/ponto";
-import { VagaNova, VagasPage, linkAbrirVaga, type TipoVaga } from "./pages/vagas";
+import { CancelarVaga, VagaNova, VagasPage, linkAbrirVaga, type TipoVaga } from "./pages/vagas";
 import { PontoLoginPage, PontoPage } from "./pages/ponto-colaborador";
 import { Alerta, Button, CabecalhoPagina, Card, Empty, Field, Input, Skeleton, botao } from "./components/ui";
 import { iniciais } from "./lib/formato";
@@ -476,7 +476,17 @@ function telaInterna(pathname: string) {
   ];
   for (const [regra, tipo, voltar] of regras) {
     const achou = pathname.match(regra);
-    if (achou?.[1]) return <Ficha caminho={`/api/v1/empresa/detalhe/${tipo}/${encodeURIComponent(achou[1])}`} voltar={voltar} rotuloVoltar={tituloDaRota(voltar)} />;
+    if (achou?.[1]) {
+      const id = achou[1];
+      return (
+        <Ficha
+          caminho={`/api/v1/empresa/detalhe/${tipo}/${encodeURIComponent(id)}`}
+          voltar={voltar}
+          rotuloVoltar={tituloDaRota(voltar)}
+          acao={tipo === "vaga" ? (situacao) => <CancelarVaga id={id} situacao={situacao} /> : undefined}
+        />
+      );
+    }
   }
   return null;
 }

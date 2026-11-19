@@ -15,6 +15,40 @@ const TIPOS: Record<TipoVaga, { nome: string; texto: string; icone: typeof Brief
   "2": { nome: "CLT", texto: "Carteira assinada, com os direitos da CLT.", icone: Briefcase, salario: "Salário", carga: "Ex.: 44 horas semanais" },
 };
 
+/**
+ * Botão "Cancelar vaga" da ficha da vaga. Só aparece com a vaga aberta ou pausada e pede confirmação.
+ * O backend grava o status 6 (cancelada), o mesmo da edição do interno, em todas as posições da vaga.
+ */
+export function CancelarVaga({ id, situacao }: { id: string; situacao: string | undefined }) {
+  const client = useQueryClient();
+  const [confirmando, setConfirmando] = useState(false);
+  const cancelar = useMutation({
+    mutationFn: () => api<{ canceladas: number }>(`/api/v1/empresa/vagas/${encodeURIComponent(id)}/cancelar`, { method: "POST" }),
+    onSuccess: async () => {
+      setConfirmando(false);
+      await client.invalidateQueries();
+    },
+  });
+  if (!["aberta", "pausada"].includes(chave(situacao ?? ""))) return null;
+  const erro = cancelar.error instanceof ApiError ? cancelar.error.message : cancelar.error ? "Não foi possível cancelar a vaga. Tente de novo." : "";
+  return (
+    <div className="grid justify-items-end gap-1.5">
+      {confirmando ? (
+        <div className="flex flex-wrap items-center justify-end gap-2" role="group" aria-label="Confirmar cancelamento">
+          <span className="text-sm font-semibold text-ink">Cancelar esta vaga? A seleção para.</span>
+          <Button variant="ghost" onClick={() => setConfirmando(false)} disabled={cancelar.isPending}>Voltar</Button>
+          <Button variant="danger" onClick={() => cancelar.mutate()} disabled={cancelar.isPending}>
+            {cancelar.isPending ? "Cancelando…" : "Sim, cancelar"}
+          </Button>
+        </div>
+      ) : (
+        <Button variant="secondary" className="text-red-700" onClick={() => { cancelar.reset(); setConfirmando(true); }}>Cancelar vaga</Button>
+      )}
+      {erro ? <p className="text-xs font-semibold text-red-700" role="alert">{erro}</p> : null}
+    </div>
+  );
+}
+
 /** Primeira opção de abrir vaga liberada para o usuário, ou null. */
 export function linkAbrirVaga(tipos: TipoVaga[]) {
   return tipos.length ? `/vagas/nova?tipo=${tipos.includes("1") ? "1" : tipos[0]}` : null;

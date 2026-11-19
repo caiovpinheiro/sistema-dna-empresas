@@ -12,6 +12,8 @@ const variants = {
   primary: "bg-violet-700 text-white shadow-[0_1px_2px_rgb(76_29_149/0.25)] hover:bg-violet-800",
   secondary: "bg-white text-ink ring-1 ring-slate-200 hover:bg-slate-50",
   ghost: "text-slate-600 hover:bg-slate-100",
+  /** Ação que não volta atrás (ex.: cancelar vaga). */
+  danger: "bg-red-600 text-white shadow-[0_1px_2px_rgb(153_27_27/0.25)] hover:bg-red-700",
 };
 
 export function Button({ variant = "primary", className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: keyof typeof variants }) {
