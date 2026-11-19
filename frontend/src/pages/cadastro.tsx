@@ -26,6 +26,8 @@ type Consulta = {
   cidade: string;
   uf: string;
 };
+type EnderecoCep = { cep: string; logradouro: string; bairro: string; cidade: string; uf: string };
+const CAMPOS_CEP = ["logradouro", "bairro", "cidade", "uf"] as const;
 type Conclusao = {
   email: string;
   senha: string;
@@ -212,6 +214,11 @@ export function CadastroPage() {
   const [modoEmpresa, setModoEmpresa] = useState<ModoEmpresa>("pendente");
   const [faltando, setFaltando] = useState<string[]>([]);
   const cnpjAtual = useRef("");
+  const [buscandoCep, setBuscandoCep] = useState(false);
+  const [avisoCep, setAvisoCep] = useState("");
+  const cepAtual = useRef("");
+  // O que o último CEP preencheu: só esses valores (ou campos vazios) são trocados quando o CEP muda.
+  const preenchidoPeloCep = useRef<Partial<Record<(typeof CAMPOS_CEP)[number], string>>>({});
   const [enviando, setEnviando] = useState(false);
   const [termos, setTermos] = useState<Termos | null>(null);
   const [modal, setModal] = useState(false);
@@ -319,6 +326,58 @@ export function CadastroPage() {
       setAviso(error instanceof ApiError ? error.message : "Não foi possível consultar o CNPJ. Preencha os dados da empresa abaixo.");
     } finally {
       setConsultando(false);
+    }
+  }
+
+  function trocarCep(valor: string) {
+    const mascarado = mascaraCep(valor);
+    definir("cep", mascarado);
+    const cep = digitos(mascarado, 8);
+    setAvisoCep("");
+    if (cep.length !== 8) {
+      cepAtual.current = "";
+      return;
+    }
+    if (cep === cepAtual.current) return;
+    cepAtual.current = cep;
+    void buscarCep(cep);
+  }
+
+  async function buscarCep(cep: string) {
+    setBuscandoCep(true);
+    try {
+      const resposta = await api<EnderecoCep>(`/api/v1/publico/cadastro/cep/${cep}`);
+      // A pessoa pode ter mudado o CEP enquanto a busca rodava.
+      if (cepAtual.current !== cep) return;
+      const dados = resposta.data;
+      const anterior = preenchidoPeloCep.current;
+      setForm((atual) => {
+        const proximo = { ...atual };
+        const novos: Partial<Record<(typeof CAMPOS_CEP)[number], string>> = {};
+        for (const campo of CAMPOS_CEP) {
+          const valor = dados[campo];
+          if (!valor) continue;
+          // Não apaga o que a pessoa digitou: troca só campo vazio ou o que veio do CEP anterior.
+          if (atual[campo].trim() === "" || atual[campo] === anterior[campo]) {
+            proximo[campo] = valor;
+            novos[campo] = valor;
+          }
+        }
+        // Usa o "anterior" capturado fora: o resultado é o mesmo se o React chamar o atualizador duas vezes.
+        preenchidoPeloCep.current = novos;
+        return proximo;
+      });
+      setErros((atual) => {
+        const proximo = { ...atual };
+        for (const campo of ["cep", ...CAMPOS_CEP]) delete proximo[campo];
+        return proximo;
+      });
+      if (!dados.logradouro) setAvisoCep("CEP geral da cidade: preencha o logradouro e o bairro.");
+    } catch (error) {
+      if (cepAtual.current !== cep) return;
+      setAvisoCep(error instanceof ApiError ? error.message : "Não foi possível buscar o CEP. Preencha o endereço abaixo.");
+    } finally {
+      if (cepAtual.current === cep) setBuscandoCep(false);
     }
   }
 
@@ -501,7 +560,7 @@ export function CadastroPage() {
                       {mostrar("razao") ? (<Campo label="Razão social" obrigatorio erro={erros.razao}><input className={entrada(erros.razao)} maxLength={255} placeholder="Nome jurídico da empresa" aria-label="Razão social" value={form.razao} onChange={(event) => definir("razao", texto(event.target.value, 255))} /></Campo>) : null}
                       {mostrar("fantasia") ? (<Campo label="Nome fantasia" erro={erros.fantasia}><input className={entrada()} maxLength={255} placeholder="Como sua empresa é conhecida" aria-label="Nome fantasia" value={form.fantasia} onChange={(event) => definir("fantasia", texto(event.target.value, 255))} /></Campo>) : null}
                       {mostrar("telefone") ? (<Campo label="Telefone comercial" obrigatorio erro={erros.telefone}><input className={entrada(erros.telefone)} inputMode="tel" autoComplete="tel" maxLength={15} placeholder="(11) 99999-9999" aria-label="Telefone comercial" value={form.telefone} onChange={(event) => definir("telefone", mascaraTelefone(event.target.value))} /></Campo>) : null}
-                      {mostrar("cep") ? (<Campo label="CEP" obrigatorio erro={erros.cep}><input className={entrada(erros.cep)} inputMode="numeric" autoComplete="postal-code" maxLength={9} placeholder="00000-000" aria-label="CEP" value={form.cep} onChange={(event) => definir("cep", mascaraCep(event.target.value))} /></Campo>) : null}
+                      {mostrar("cep") ? (<Campo label="CEP" obrigatorio erro={erros.cep}><input className={entrada(erros.cep)} inputMode="numeric" autoComplete="postal-code" maxLength={9} placeholder="00000-000" aria-label="CEP" value={form.cep} onChange={(event) => trocarCep(event.target.value)} />{buscandoCep ? <span className="mt-1 block text-xs text-[#8c7d95]" aria-live="polite">Buscando o endereço…</span> : avisoCep ? <span className="mt-1 block text-xs text-[#8a5a00]" aria-live="polite">{avisoCep}</span> : null}</Campo>) : null}
                       {mostrar("logradouro") ? (<Campo label="Logradouro" obrigatorio erro={erros.logradouro} className="sm:col-span-2"><input className={entrada(erros.logradouro)} maxLength={255} autoComplete="address-line1" placeholder="Rua, avenida ou travessa" aria-label="Logradouro" value={form.logradouro} onChange={(event) => definir("logradouro", texto(event.target.value, 255))} /></Campo>) : null}
                       {mostrar("numero") ? (<Campo label="Número" obrigatorio erro={erros.numero}><input className={entrada(erros.numero)} maxLength={10} placeholder="123 ou S/N" aria-label="Número" value={form.numero} onChange={(event) => definir("numero", texto(event.target.value, 10).toUpperCase())} /></Campo>) : null}
                       {mostrar("complemento") ? (<Campo label="Complemento"><input className={entrada()} maxLength={100} placeholder="Sala, conjunto ou andar" aria-label="Complemento" value={form.complemento} onChange={(event) => definir("complemento", texto(event.target.value, 100))} /></Campo>) : null}

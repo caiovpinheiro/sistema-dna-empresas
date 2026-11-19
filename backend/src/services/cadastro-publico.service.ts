@@ -58,6 +58,14 @@ export type ConsultaCnpj = {
   uf: string;
 };
 
+export type ConsultaCep = {
+  cep: string;
+  logradouro: string;
+  bairro: string;
+  cidade: string;
+  uf: string;
+};
+
 export type CadastroConcluido = {
   empresaId: string;
   vagaId: string;
@@ -86,11 +94,12 @@ export class CadastroPublicoService {
     const digitos = somenteDigitos(limparTexto(cnpjInformado, 18));
     if (!cnpjValido(digitos)) throw new AppError(422, "CNPJ_INVALIDO", "Informe um CNPJ válido com 14 números.");
     const existe = await this.empresaExiste(digitos);
-    const receita = await this.buscarReceita(digitos);
+    const { receita, respondeu } = await this.buscarReceita(digitos);
     const telefone = somenteDigitos(receita?.ddd_telefone_1 ?? "").slice(-11);
     return {
       existe,
-      consulta: Boolean(receita),
+      // true quando a Receita respondeu, mesmo sem achar o CNPJ (404). false só quando a consulta falhou de fato.
+      consulta: respondeu,
       cnpj: formatarCnpj(digitos),
       razao: limparTexto(receita?.razao_social, 255),
       fantasia: limparTexto(receita?.nome_fantasia, 255),
@@ -352,7 +361,11 @@ export class CadastroPublicoService {
     return achou.rowCount !== 0;
   }
 
-  private async buscarReceita(digitos: string): Promise<Receita | null> {
+  /**
+   * Dados da Receita pela BrasilAPI. `respondeu` separa "CNPJ não existe na Receita" (404: respondeu, sem dados)
+   * de "não deu para consultar" (rede, tempo esgotado, 429 ou 5xx: não respondeu).
+   */
+  private async buscarReceita(digitos: string): Promise<{ receita: Receita | null; respondeu: boolean }> {
     const controle = new AbortController();
     const timer = setTimeout(() => controle.abort(), 8000);
     try {
@@ -360,13 +373,44 @@ export class CadastroPublicoService {
         signal: controle.signal,
         headers: { accept: "application/json", "user-agent": "DNAWorkPortal/1.0" },
       });
-      if (!resposta.ok) return null;
-      return await resposta.json() as Receita;
+      if (resposta.status === 404) return { receita: null, respondeu: true };
+      if (!resposta.ok) return { receita: null, respondeu: false };
+      return { receita: await resposta.json() as Receita, respondeu: true };
     } catch {
-      return null;
+      return { receita: null, respondeu: false };
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /** Endereço pelo CEP: BrasilAPI e, se ela falhar, ViaCEP. Null quando o CEP não existe ou nenhuma respondeu. */
+  async consultarCep(cepInformado: string): Promise<ConsultaCep | null> {
+    const cep = somenteDigitos(limparTexto(cepInformado, 9));
+    if (cep.length !== 8) throw new AppError(422, "CEP_INVALIDO", "Informe o CEP com 8 números.");
+    const buscar = async <T>(url: string): Promise<{ status: number; corpo: T | null }> => {
+      const controle = new AbortController();
+      const timer = setTimeout(() => controle.abort(), 5000);
+      try {
+        const resposta = await fetch(url, { signal: controle.signal, headers: { accept: "application/json", "user-agent": "DNAWorkPortal/1.0" } });
+        return { status: resposta.status, corpo: resposta.ok ? await resposta.json() as T : null };
+      } catch {
+        return { status: 0, corpo: null };
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const montar = (logradouro?: string, bairro?: string, cidade?: string, uf?: string): ConsultaCep => ({
+      cep: formatarCep(cep),
+      logradouro: limparTexto(logradouro, 255),
+      bairro: limparTexto(bairro, 50),
+      cidade: limparTexto(cidade, 100),
+      uf: limparTexto(uf, 2).toUpperCase(),
+    });
+    const brasil = await buscar<{ street?: string; neighborhood?: string; city?: string; state?: string }>(`https://brasilapi.com.br/api/cep/v2/${cep}`);
+    if (brasil.corpo?.city) return montar(brasil.corpo.street, brasil.corpo.neighborhood, brasil.corpo.city, brasil.corpo.state);
+    const via = await buscar<{ erro?: boolean | string; logradouro?: string; bairro?: string; localidade?: string; uf?: string }>(`https://viacep.com.br/ws/${cep}/json/`);
+    if (via.corpo && !via.corpo.erro && via.corpo.localidade) return montar(via.corpo.logradouro, via.corpo.bairro, via.corpo.localidade, via.corpo.uf);
+    return null;
   }
 }
 

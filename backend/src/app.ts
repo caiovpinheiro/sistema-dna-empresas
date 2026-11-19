@@ -126,6 +126,12 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
 
   const limiteCadastro = { config: { rateLimit: { max: 8, timeWindow: "10 minutes" } } };
   app.get("/api/v1/publico/cadastro/termos", async () => ({ success: true, data: cadastro.termos() }));
+  app.get("/api/v1/publico/cadastro/cep/:cep", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (request) => {
+    const cep = (request.params as { cep: string }).cep;
+    const endereco = await cadastro.consultarCep(cep);
+    if (!endereco) throw new AppError(404, "CEP_NAO_ENCONTRADO", "Não encontramos este CEP. Preencha o endereço abaixo.");
+    return { success: true, data: endereco };
+  });
   app.get("/api/v1/publico/cadastro/cnpj/:cnpj", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request) => {
     const cnpj = (request.params as { cnpj: string }).cnpj;
     return { success: true, data: await cadastro.consultarCnpj(cnpj) };
