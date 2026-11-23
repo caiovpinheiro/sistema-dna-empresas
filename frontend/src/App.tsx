@@ -1,5 +1,8 @@
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Briefcase, Building2, ChevronDown, Circle, Clock, Gauge, GraduationCap, LayoutDashboard, Lock, LogOut, Menu, Plus, Settings, User, Users, Wallet, X, type LucideIcon } from "lucide-react";
+import {
+  Briefcase, Building2, CalendarDays, CalendarX, ChevronDown, ClipboardCheck, Clock, FileBarChart, Folder, GraduationCap, IdCard, LayoutDashboard,
+  KeyRound, Lock, LogOut, Menu, Plus, Receipt, Settings, Timer, User, UserCheck, UserCog, UserSearch, Users, Wallet, X, type LucideIcon,
+} from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { CadastroPage } from "./pages/cadastro";
@@ -7,6 +10,8 @@ import { Consulta, Faturas, Ficha, Inicio } from "./pages/consultas";
 import { CargaNova, ColaboradorNovo, ColaboradoresPonto, EscalaNova, FeriadoNovo, Formulario, Listagem, RelatorioPonto, RelatorioPontoColaborador } from "./pages/ponto";
 import { CancelarVaga, VagaNova, VagasPage, linkAbrirVaga, type TipoVaga } from "./pages/vagas";
 import { PontoLoginPage, PontoPage } from "./pages/ponto-colaborador";
+import { AlterarSenhaPage } from "./pages/senha";
+import { FeriadosPage } from "./pages/feriados";
 import { Alerta, Button, CabecalhoPagina, Card, Empty, Field, Input, Skeleton, botao } from "./components/ui";
 import { iniciais } from "./lib/formato";
 import { FundoLiquido } from "./components/fundo-liquido";
@@ -52,7 +57,7 @@ const ROTAS = [
   "/relatorios/seguro", "/relatorios/seguro/:id", "/relatorios/calendario", "/relatorios/calendario/:id",
   "/avaliacoes", "/avaliacoes/:id", "/holerite", "/holerite/:id",
   "/empresa", "/empresa/filial", "/usuarios", "/usuarios/novo", "/usuarios/:id",
-  "/contratados", "/contratados/:id", "/opcao",
+  "/contratados", "/contratados/:id", "/opcao", "/senha",
 ];
 
 function Protegido() {
@@ -98,7 +103,7 @@ function Portal({ sessao }: { sessao: Sessao }) {
         </li>
         {menu.isLoading ? <li className="px-3 py-2 text-xs text-slate-500">{expandido ? "Carregando menu…" : ""}</li> : null}
         {menu.isError && expandido ? <li className="px-3 py-2 text-xs text-rose-300">{menu.error instanceof ApiError ? menu.error.message : "Não foi possível carregar o menu."}</li> : null}
-        {itens.filter((item) => !(item.link && destinoDoLink(item.link) === "/dashboard")).map((item) => <Ramo key={item.id} item={item} ativo={link} expandido={expandido} onNavigate={fechar} />)}
+        {itens.filter((item) => !(item.link && destinoDoLink(item.link) === "/dashboard")).map(simplificarPonto).map((item) => <Ramo key={item.id} item={item} ativo={link} expandido={expandido} onNavigate={fechar} />)}
       </ul>
     </nav>
   );
@@ -116,6 +121,7 @@ function Portal({ sessao }: { sessao: Sessao }) {
           {hover ? <div className="px-3 pb-2"><EmpresaSelect empresas={sessao.empresas} atual={sessao.empresaId} /></div> : null}
           {nav(hover, () => setHover(false))}
           <div className="border-t border-white/10 p-2">
+            <ItemLink href="/senha" label="Alterar senha" icone={KeyRound} ativo={pathname === "/senha"} expandido={hover} onNavigate={() => setHover(false)} />
             <Sair compacto={!hover} />
             {hover ? <p className="truncate px-3 pt-1 text-xs text-slate-500">{sessao.email}</p> : null}
           </div>
@@ -132,6 +138,7 @@ function Portal({ sessao }: { sessao: Sessao }) {
         <div className="px-3 pb-2"><EmpresaSelect empresas={sessao.empresas} atual={sessao.empresaId} /></div>
         {nav(true, () => setAberto(false))}
         <div className="border-t border-white/10 p-2">
+          <ItemLink href="/senha" label="Alterar senha" icone={KeyRound} ativo={pathname === "/senha"} expandido onNavigate={() => setAberto(false)} />
           <Sair />
           <p className="truncate px-3 pt-1 text-xs text-slate-500">{sessao.email}</p>
         </div>
@@ -149,12 +156,12 @@ function Portal({ sessao }: { sessao: Sessao }) {
           {pathname === "/dashboard" ? <Inicio acessos={acessosLiberados(itens)} nome={sessao.nome} abrirVaga={abrirVaga} /> : null}
           {pathname === "/colaboradores" ? <Consulta titulo="Colaboradores" descricao="Quem trabalha ou já trabalhou na empresa pela DNA Work. Clique no nome para ver a ficha." caminho="/api/v1/empresa/colaboradores" filtroStatus singular="colaborador" plural="colaboradores" acoes={temLink(itens, "cadastrar-colaborador.php") ? <Link to="/colaboradores/novo" className={botao("primary", "botao")}><Plus size={16} /> Cadastrar colaborador</Link> : null} linkNome={(linha) => linha.id_candidato ? `/colaboradores/${linha.id_candidato}` : null} colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "datainicio", titulo: "Contratação" }, { chave: "departamento", titulo: "Departamento" }, { chave: "cargo", titulo: "Cargo" }, { chave: "modalidade", titulo: "Modalidade" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
           {pathname === "/colaboradores/novo" ? <ColaboradorNovo /> : null}
-          {pathname === "/escalas" ? <Listagem titulo="Escalas" descricao="Horários de cada dia da semana usados no ponto." caminho="/api/v1/empresa/escalas" novo="/escalas/nova" rotuloNovo="Nova escala" singular="escala" plural="escalas" linkNome={(linha) => linha.id ? `/escalas/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Escala" }, { chave: "segunda", titulo: "Segunda" }, { chave: "terca", titulo: "Terça" }, { chave: "quarta", titulo: "Quarta" }, { chave: "quinta", titulo: "Quinta" }, { chave: "sexta", titulo: "Sexta" }, { chave: "sabado", titulo: "Sábado" }, { chave: "domingo", titulo: "Domingo" }]} /> : null}
-          {pathname === "/escalas/nova" ? <EscalaNova /> : null}
-          {pathname === "/cargas" ? <Listagem titulo="Cargas horárias" descricao="Entrada, intervalo e saída de cada jornada." caminho="/api/v1/empresa/cargas" novo="/cargas/nova" rotuloNovo="Nova carga horária" singular="carga horária" plural="cargas horárias" linkNome={(linha) => linha.id ? `/cargas/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Carga horária" }, { chave: "tipo", titulo: "Tipo" }, { chave: "entrada", titulo: "Entrada" }, { chave: "saida_refeicao", titulo: "Saída refeição" }, { chave: "retorno_refeicao", titulo: "Retorno refeição" }, { chave: "saida", titulo: "Saída" }]} /> : null}
-          {pathname === "/cargas/nova" ? <CargaNova /> : null}
-          {pathname === "/feriados" ? <Listagem titulo="Feriados" descricao="Dias sem expediente considerados no ponto." caminho="/api/v1/empresa/feriados" novo="/feriados/novo" rotuloNovo="Novo feriado" singular="feriado" plural="feriados" linkNome={(linha) => linha.id ? `/feriados/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "data", titulo: "Data" }]} /> : null}
-          {pathname === "/feriados/novo" ? <FeriadoNovo /> : null}
+          {pathname === "/escalas" ? <Listagem titulo="Escalas" descricao="Dias de trabalho e de folga de cada semana. O horário de cada dia vem da carga horária." caminho="/api/v1/empresa/escalas" cadastro={{ titulo: "Cadastrar escala", descricao: "Marque os dias em que a pessoa trabalha. O horário de cada dia vem da carga horária.", formulario: (fechar) => <EscalaNova aoFechar={fechar} /> }} excluir={{ caminho: (linha) => linha.id ? `/api/v1/empresa/escalas/${linha.id}` : null, nome: (linha) => String(linha.nome ?? "escala") }} rotuloNovo="Nova escala" singular="escala" plural="escalas" linkNome={(linha) => linha.id ? `/escalas/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Escala" }, { chave: "segunda", titulo: "Segunda" }, { chave: "terca", titulo: "Terça" }, { chave: "quarta", titulo: "Quarta" }, { chave: "quinta", titulo: "Quinta" }, { chave: "sexta", titulo: "Sexta" }, { chave: "sabado", titulo: "Sábado" }, { chave: "domingo", titulo: "Domingo" }]} /> : null}
+          {pathname === "/escalas/nova" ? <Navigate to="/escalas?novo=1" replace /> : null}
+          {pathname === "/cargas" ? <Listagem titulo="Cargas horárias" descricao="Entrada, intervalo e saída de cada jornada." caminho="/api/v1/empresa/cargas" cadastro={{ titulo: "Cadastrar carga horária", descricao: "Diurno ou noturno é calculado pelo horário.", formulario: (fechar) => <CargaNova aoFechar={fechar} /> }} excluir={{ caminho: (linha) => linha.id ? `/api/v1/empresa/cargas/${linha.id}` : null, nome: (linha) => String(linha.nome ?? "carga horária") }} rotuloNovo="Nova carga horária" singular="carga horária" plural="cargas horárias" linkNome={(linha) => linha.id ? `/cargas/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Carga horária" }, { chave: "tipo", titulo: "Tipo" }, { chave: "entrada", titulo: "Entrada" }, { chave: "saida_refeicao", titulo: "Saída refeição" }, { chave: "retorno_refeicao", titulo: "Retorno refeição" }, { chave: "saida", titulo: "Saída" }]} /> : null}
+          {pathname === "/cargas/nova" ? <Navigate to="/cargas?novo=1" replace /> : null}
+          {pathname === "/feriados" ? <FeriadosPage /> : null}
+          {pathname === "/feriados/novo" ? <Navigate to="/feriados?novo=1" replace /> : null}
           {pathname === "/ponto/colaboradores" ? <ColaboradoresPonto /> : null}
           {pathname.startsWith("/ponto/colaborador/") ? <RelatorioPontoColaborador id={decodeURIComponent(pathname.slice("/ponto/colaborador/".length))} /> : null}
           {pathname === "/ponto/relatorio" ? <RelatorioPonto /> : null}
@@ -172,6 +179,7 @@ function Portal({ sessao }: { sessao: Sessao }) {
           {pathname === "/usuarios/novo" ? <Formulario titulo="Cadastrar usuário" descricao="A pessoa entra no portal com o e-mail e a senha informados aqui." destino="/api/v1/empresa/usuarios" voltar="/usuarios" campos={[["nome", "Nome", "text"], ["email", "E-mail", "email"], ["telefone", "Telefone", "text"], ["senha", "Senha", "password"]]} /> : null}
           {pathname === "/empresa/filial" ? <Formulario titulo="Cadastrar filial" destino="/api/v1/empresa/filiais" voltar="/empresa" campos={[["nome", "Nome", "text"], ["cnpj", "CNPJ", "text"], ["email", "E-mail", "email"], ["cidade", "Cidade", "text"]]} /> : null}
           {pathname === "/empresa" ? <EmpresaDados /> : null}
+          {pathname === "/senha" ? <AlterarSenhaPage /> : null}
           {pathname === "/faturas" ? <Faturas /> : null}
           {pathname === "/vagas" ? <VagasPage tipos={tipos} /> : null}
           {pathname === "/contratados" ? <Consulta titulo="Contratados" descricao="Todas as contratações feitas pela DNA Work para a empresa." caminho="/api/v1/empresa/contratados" singular="contratação" plural="contratações" linkNome={(linha) => linha.id ? `/contratados/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "inicio", titulo: "Contratação" }, { chave: "departamento", titulo: "Departamento" }, { chave: "cargo", titulo: "Cargo" }, { chave: "contrato", titulo: "Modalidade" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
@@ -202,7 +210,7 @@ function ItemLink({ href, label, icone: Icone, ativo, expandido, onNavigate, niv
     <Link to={href} onClick={onNavigate} title={label} aria-current={ativo ? "page" : undefined}
       className={`relative flex h-10 items-center gap-3 rounded-lg px-2.5 text-[13px] font-semibold transition duration-150 ${ativo ? "bg-white/10 text-white" : "text-slate-300 hover:bg-white/[0.07] hover:text-white"}`}>
       {ativo && nivel === 0 ? <span aria-hidden="true" className="absolute inset-y-2 left-0 w-[3px] rounded-full bg-violet-400" /> : null}
-      {nivel === 0 ? <Icone size={18} className={`shrink-0 ${ativo ? "text-violet-300" : ""}`} /> : <span className={`ml-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${ativo ? "bg-violet-300" : "bg-slate-500"}`} />}
+      {nivel <= 1 ? <Icone size={18} className={`shrink-0 ${ativo ? "text-violet-300" : ""}`} /> : <span className={`ml-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${ativo ? "bg-violet-300" : "bg-slate-500"}`} />}
       <span className={`min-w-0 overflow-hidden whitespace-nowrap transition-all duration-300 ${expandido ? "max-w-56 opacity-100" : "max-w-0 opacity-0"}`}>{label}</span>
     </Link>
   );
@@ -240,6 +248,24 @@ function Ramo({ item, ativo, expandido, onNavigate, nivel = 0 }: { item: ItemMen
       ) : null}
     </li>
   );
+}
+
+/**
+ * No Ponto Inteligente cada submenu vira um link só, para a lista: "Configurar Escalas › Consultar / Cadastrar" vira "Escalas".
+ * O cadastro abre numa janela na própria lista. As permissões não mudam: o menu da API continua o mesmo, só o desenho muda.
+ */
+function simplificarPonto(item: ItemMenu): ItemMenu {
+  if (!/ponto/i.test(item.label)) return item;
+  return {
+    ...item,
+    children: item.children.map((grupo) => {
+      if (grupo.link || !grupo.children.length) return grupo;
+      const cadastro = (filho: ItemMenu) => /^cadastrar/i.test(filho.label) || /\/(nova|novo)$/.test(destinoDoLink(filho.link ?? "").split("?")[0]);
+      const principal = grupo.children.find((filho) => !cadastro(filho)) ?? grupo.children[0];
+      const label = grupo.label.replace(/^configurar\s+/i, "");
+      return { ...grupo, label: label.charAt(0).toUpperCase() + label.slice(1), link: principal.link, children: [] };
+    }),
+  };
 }
 
 /** /vagas não fica marcado em /vagas/nova quando "Abrir vaga" também está no menu. */
@@ -552,18 +578,32 @@ function destinoDoLink(link: string): string {
   return `/opcao?link=${encodeURIComponent(link)}`;
 }
 
+/** Ícone de cada menu e submenu pelo nome. As regras mais específicas vêm primeiro; sem regra, um ícone de pasta. */
+const ICONES: Array<[RegExp, LucideIcon]> = [
+  [/dashboard|in[ií]cio/, LayoutDashboard],
+  [/escala/, CalendarDays],
+  [/carga hor/, Timer],
+  [/feriado/, CalendarX],
+  [/relat/, FileBarChart],
+  [/holerite/, Receipt],
+  [/fatura|financ/, Wallet],
+  [/talento/, UserSearch],
+  [/contratad/, UserCheck],
+  [/usu[aá]rio/, UserCog],
+  [/colaborador/, Users],
+  [/vaga/, Briefcase],
+  [/avalia/, ClipboardCheck],
+  [/ponto/, Clock],
+  [/treinamento/, GraduationCap],
+  [/recrut/, UserSearch],
+  [/pessoal/, IdCard],
+  [/empresa/, Building2],
+  [/setup|configura/, Settings],
+];
+
 function iconeDe(label: string): LucideIcon {
   const texto = label.toLowerCase();
-  if (texto.includes("dashboard") || texto.includes("início") || texto.includes("inicio")) return LayoutDashboard;
-  if (texto.includes("ponto")) return Clock;
-  if (texto.includes("avalia") || texto.includes("relat")) return Gauge;
-  if (texto.includes("treinamento")) return GraduationCap;
-  if (texto.includes("recrut") || texto.includes("usuár") || texto.includes("usuar") || texto.includes("talento")) return Users;
-  if (texto.includes("pessoal") || texto.includes("vaga") || texto.includes("colabor")) return Briefcase;
-  if (texto.includes("financ") || texto.includes("holerite") || texto.includes("fatura")) return Wallet;
-  if (texto.includes("setup")) return Settings;
-  if (texto.includes("empresa")) return Building2;
-  return Circle;
+  return ICONES.find(([regra]) => regra.test(texto))?.[1] ?? Folder;
 }
 
 function achar(itens: ItemMenu[], link: string): ItemMenu | null {
@@ -598,13 +638,15 @@ function tiposDeVaga(itens: ItemMenu[]): TipoVaga[] {
 
 const TITULOS: Array<[RegExp, string]> = [
   [/^\/dashboard$/, "Início"],
+  [/^\/senha$/, "Alterar senha"],
   [/^\/vagas\/nova$/, "Abrir vaga"],
   [/^\/vagas/, "Vagas"],
   [/^\/colaboradores\/novo$/, "Cadastrar colaborador"],
   [/^\/colaboradores/, "Colaboradores"],
   [/^\/contratados/, "Contratados"],
   [/^\/ponto\/relatorio$/, "Cartão ponto"],
-  [/^\/ponto/, "Ponto por colaborador"],
+  [/^\/ponto\/colaboradores$/, "Colaboradores"],
+  [/^\/ponto/, "Ponto do colaborador"],
   [/^\/escalas/, "Escalas"],
   [/^\/cargas/, "Cargas horárias"],
   [/^\/feriados/, "Feriados"],

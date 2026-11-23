@@ -69,9 +69,22 @@ export class PortalEmpresaService {
     return { ...sessao, empresaId };
   }
 
-  async trocarSenha(usuarioId: string, password: string): Promise<void> {
+  /**
+   * Troca a senha do próprio usuário. Na troca obrigatória (primeiro acesso ou senha vencida) basta a nova, porque a
+   * pessoa acabou de entrar com a antiga. Fora dela, pede a senha atual: uma sessão esquecida aberta não troca a senha.
+   */
+  async trocarSenha(usuarioId: string, password: string, senhaAtual?: string): Promise<void> {
     if (password.length < 6) {
-      throw new AppError(422, "SENHA_CURTA", "A senha precisa ter pelo menos 6 caracteres.");
+      throw new AppError(422, "SENHA_CURTA", "A senha precisa ter pelo menos 6 caracteres.", { password: "Use pelo menos 6 caracteres." });
+    }
+    const usuario = await this.buscarPorId(usuarioId);
+    if (!senhaVencida(usuario.data_senha, usuario.atualiza_senha)) {
+      if (!senhaAtual || !(await this.senhaConfere(usuario, senhaAtual))) {
+        throw new AppError(422, "SENHA_ATUAL_INVALIDA", "A senha atual não confere.", { senhaAtual: "A senha atual não confere." });
+      }
+      if (senhaAtual === password) {
+        throw new AppError(422, "SENHA_IGUAL", "A senha nova precisa ser diferente da atual.", { password: "Escolha uma senha diferente da atual." });
+      }
     }
     const senhaHash = await hash(password);
     const senhaLegada = createHash("md5").update(password).digest("hex");

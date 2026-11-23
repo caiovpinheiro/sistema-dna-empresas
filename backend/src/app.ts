@@ -186,8 +186,8 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   });
 
   app.post("/api/v1/empresa/senha", async (request) => {
-    const body = ler(z.object({ password: z.string().min(6).max(200) }), request.body);
-    await portal.trocarSenha(request.user.sub, body.password);
+    const body = ler(z.object({ password: z.string().min(6).max(200), senhaAtual: z.string().max(200).optional() }), request.body);
+    await portal.trocarSenha(request.user.sub, body.password, body.senhaAtual);
     const sessao = await portal.sessao(request.user.sub, request.user.empresaId!);
     return { success: true, data: sessao };
   });
@@ -221,6 +221,28 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   app.get("/api/v1/empresa/cargas", async (request) => ({ success: true, data: await dados.cargas(request.user.sub, request.user.empresaId!) }));
   app.post("/api/v1/empresa/cargas", async (request) => ({ success: true, data: await dados.salvarCarga(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
   app.get("/api/v1/empresa/ponto/relatorio", async (request) => ({ success: true, data: await dados.relatorioPonto(request.user.sub, request.user.empresaId!) }));
+  // Configuração do ponto de uma pessoa (:id = id_candidato, o mesmo da tela do relatório).
+  app.get("/api/v1/empresa/ponto/colaborador/:id/configuracao", async (request) => {
+    const { id } = request.params as { id: string };
+    return { success: true, data: await dados.configuracaoPonto(request.user.sub, request.user.empresaId!, id) };
+  });
+  app.post("/api/v1/empresa/ponto/colaborador/:id/jornada", async (request) => {
+    const { id } = request.params as { id: string };
+    return { success: true, data: await dados.salvarJornada(request.user.sub, request.user.empresaId!, id, corpo(request.body)) };
+  });
+  // "Apagar" na tela = desligar: os registros de ponto ficam guardados (obrigação legal da empresa).
+  app.post("/api/v1/empresa/ponto/colaborador/:id/desligar", async (request) => {
+    const { id } = request.params as { id: string };
+    return { success: true, data: await dados.desligarColaborador(request.user.sub, request.user.empresaId!, id) };
+  });
+  app.post("/api/v1/empresa/ponto/colaborador/:id/ferias", async (request) => {
+    const { id } = request.params as { id: string };
+    return { success: true, data: await dados.salvarFerias(request.user.sub, request.user.empresaId!, id, corpo(request.body)) };
+  });
+  app.delete("/api/v1/empresa/ponto/colaborador/:id/ferias/:ferias", async (request) => {
+    const { id, ferias } = request.params as { id: string; ferias: string };
+    return { success: true, data: await dados.excluirFerias(request.user.sub, request.user.empresaId!, id, ferias) };
+  });
   app.get("/api/v1/empresa/ponto/colaboradores", async (request) => {
     const query = ler(z.object({
       q: z.string().optional(),
@@ -240,7 +262,22 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
     const id = (request.params as { id: string }).id;
     return { success: true, data: await dados.relatorioPontoColaborador(request.user.sub, request.user.empresaId!, id, periodo.de, periodo.ate) };
   });
-  app.get("/api/v1/empresa/feriados", async (request) => ({ success: true, data: await dados.feriados(request.user.sub, request.user.empresaId!) }));
+  app.get("/api/v1/empresa/feriados", async (request) => {
+    const { ano } = request.query as { ano?: string };
+    return { success: true, data: await dados.feriados(request.user.sub, request.user.empresaId!, ano) };
+  });
+  app.delete("/api/v1/empresa/escalas/:id", async (request) => {
+    const { id } = request.params as { id: string };
+    return { success: true, data: await dados.excluirEscala(request.user.sub, request.user.empresaId!, id) };
+  });
+  app.delete("/api/v1/empresa/cargas/:id", async (request) => {
+    const { id } = request.params as { id: string };
+    return { success: true, data: await dados.excluirCarga(request.user.sub, request.user.empresaId!, id) };
+  });
+  app.delete("/api/v1/empresa/feriados/:id", async (request) => {
+    const { id } = request.params as { id: string };
+    return { success: true, data: await dados.excluirFeriado(request.user.sub, request.user.empresaId!, id) };
+  });
   app.post("/api/v1/empresa/feriados", async (request) => ({ success: true, data: await dados.salvarFeriado(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
   app.post("/api/v1/empresa/colaboradores", async (request) => ({ success: true, data: await dados.salvarColaborador(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
   app.post("/api/v1/empresa/vagas", async (request) => ({ success: true, data: await dados.salvarVaga(request.user.sub, request.user.empresaId!, corpo(request.body), request.user.email) }));

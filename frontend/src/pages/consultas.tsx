@@ -176,7 +176,7 @@ export function Celula({ chave: coluna, valor }: { chave: string; valor: string 
   return <>{texto}</>;
 }
 
-export function Consulta({ titulo, descricao, caminho, colunas, linkNome, linkColuna = "nome", filtroStatus = false, singular = "registro", plural = "registros", acoes }: {
+export function Consulta({ titulo, descricao, caminho, colunas, linkNome, linkColuna = "nome", filtroStatus = false, rotuloInativos = "Inativos", singular = "registro", plural = "registros", acoes }: {
   titulo: string;
   descricao?: string;
   caminho: string;
@@ -184,6 +184,7 @@ export function Consulta({ titulo, descricao, caminho, colunas, linkNome, linkCo
   linkNome?: (linha: Linha) => string | null;
   linkColuna?: string;
   filtroStatus?: boolean;
+  rotuloInativos?: string;
   singular?: string;
   plural?: string;
   acoes?: ReactNode;
@@ -205,7 +206,7 @@ export function Consulta({ titulo, descricao, caminho, colunas, linkNome, linkCo
           <button className={botao("secondary")}>Buscar</button>
         </form>
         {filtroStatus ? (
-          <FiltroChips rotulo="Situação" valor={status} onChange={setStatus} opcoes={[{ id: "ativo", rotulo: "Ativos" }, { id: "inativo", rotulo: "Inativos" }, { id: "todos", rotulo: "Todos" }]} />
+          <FiltroChips rotulo="Situação" valor={status} onChange={setStatus} opcoes={[{ id: "ativo", rotulo: "Ativos" }, { id: "inativo", rotulo: rotuloInativos }, { id: "todos", rotulo: "Todos" }]} />
         ) : null}
       </Card>
       <Resumo total={linhas.length} singular={singular} plural={plural} carregando={lista.isLoading} />
@@ -220,11 +221,13 @@ export function Consulta({ titulo, descricao, caminho, colunas, linkNome, linkCo
 }
 
 /** Tabela no computador e cartões no celular, com as mesmas informações. */
-export function TabelaLinhas({ linhas, colunas, linkNome, linkColuna = "nome" }: {
+export function TabelaLinhas({ linhas, colunas, linkNome, linkColuna = "nome", acao }: {
   linhas: Array<Record<string, string | number | null>>;
   colunas: Array<{ chave: string; titulo: string }>;
   linkNome?: (linha: Record<string, string | number | null>) => string | null;
   linkColuna?: string;
+  /** Botões no fim de cada linha (ex.: apagar). */
+  acao?: (linha: Record<string, string | number | null>) => ReactNode;
 }) {
   const [principal, ...resto] = [colunas.find((coluna) => coluna.chave === linkColuna) ?? colunas[0], ...colunas.filter((coluna) => coluna.chave !== linkColuna)];
   return (
@@ -243,7 +246,10 @@ export function TabelaLinhas({ linhas, colunas, linkNome, linkColuna = "nome" }:
                     </td>
                   ))}
                   <td className="w-px whitespace-nowrap text-right">
-                    {href ? <Link to={href} aria-label="Abrir" className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs">Abrir <ChevronRight size={14} /></Link> : null}
+                    <div className="flex items-center justify-end gap-1">
+                      {href ? <Link to={href} aria-label="Abrir" className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs">Abrir <ChevronRight size={14} /></Link> : null}
+                      {acao?.(linha)}
+                    </div>
                   </td>
                 </tr>
               );
@@ -266,6 +272,7 @@ export function TabelaLinhas({ linhas, colunas, linkNome, linkColuna = "nome" }:
                   </div>
                 ))}
               </dl>
+              {acao ? <div className="flex justify-end">{acao(linha)}</div> : null}
             </li>
           );
         })}

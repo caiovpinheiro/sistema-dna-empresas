@@ -7,6 +7,9 @@ const db = createPool(config);
 try {
   await db.query("alter table dna_work.usuario_empresa add column if not exists senha_hash text");
   await db.query("alter table dna_work.vaga add column if not exists cidade character varying");
+  // Feriado que repete todo ano (fixo) e ponto facultativo, que não conta como feriado no cálculo do ponto.
+  await db.query("alter table dna_work.feriados add column if not exists fixo smallint not null default 0");
+  await db.query("alter table dna_work.feriados add column if not exists facultativo smallint not null default 0");
   await db.query(`
     create table if not exists dna_work.cadastro_empresa_aceite (
       id uuid primary key,

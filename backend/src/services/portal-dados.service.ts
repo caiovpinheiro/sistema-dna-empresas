@@ -3,10 +3,24 @@ import type { Pool } from "pg";
 import { AppError } from "../lib/errors.js";
 import { postServico } from "../lib/servico.js";
 import { SEDE_DNA, USA_ASAAS, gravarValoresPadraoDaVaga, semAcento } from "../lib/empresa-interno.js";
+import { ABRANGENCIAS, dataNoAno, feriadosNacionais, isoDe, type Abrangencia } from "../lib/feriados.js";
 
-function dia(valor: string | undefined) {
-  const numero = Number(valor);
-  return Number.isInteger(numero) && numero > 0 ? numero : null;
+/**
+ * Diurno ou Noturno pelo horário, sem a pessoa escolher. Noturno quando a jornada passa da meia-noite (é assim que o ponto
+ * decide de que dia é a saída) ou quando mais da metade dela cai entre 22h e 5h, o horário noturno da CLT (art. 73).
+ */
+function tipoDaJornada(entrada: string, saida: string): "Diurno" | "Noturno" {
+  const minutos = (hora: string) => Number(hora.slice(0, 2)) * 60 + Number(hora.slice(3, 5));
+  const inicio = minutos(entrada);
+  let fim = minutos(saida);
+  if (fim <= inicio) fim += 24 * 60;
+  if (fim > 24 * 60) return "Noturno";
+  let noturnos = 0;
+  for (let minuto = inicio; minuto < fim; minuto += 1) {
+    const doDia = minuto % (24 * 60);
+    if (doDia >= 22 * 60 || doDia < 5 * 60) noturnos += 1;
+  }
+  return noturnos * 2 > fim - inicio ? "Noturno" : "Diurno";
 }
 
 function dataLegado(iso: string) {
@@ -291,8 +305,212 @@ export class PortalDadosService {
     return rows.rows;
   }
 
+  /**
+   * Colaboradores do ponto (cada linha de dna_work.colaborador da empresa). Situação: Férias ou Recesso, para estagiário
+   * (hoje dentro de um período de dna_work.ferias), Fora do ponto (status_ponto 0), Desligado ou Ativo. Jornada = escala + carga horária ligadas.
+   * Modalidade: a do colaborador (tipo_vaga) ou a da vaga da última contratação.
+   */
   async colaboradoresPonto(usuarioId: string, empresaId: string, busca: string, status: string) {
-    return this.colaboradores(usuarioId, empresaId, busca, status);
+    await this.garantir(usuarioId, empresaId);
+    const filtro = status === "ativo" || status === "inativo" ? status : "todos";
+    const hoje = dataLegado(dataSp(0));
+    const rows = await this.db.query(`
+      select * from (
+        -- Uma linha por pessoa: a passagem ativa ou, se todas foram desligadas, a mais recente.
+        select distinct on (col.id_candidato)
+               c.nome, c.id_candidato, col.id_colaborador, col.departamento,
+               coalesce(nullif(btrim(col.cargo), ''), ultima.cargo) as cargo,
+               m.descricao as modalidade,
+               coalesce(nullif(btrim(col.data_inicio), ''), ultima.datainicio) as datainicio,
+               case
+                 when coalesce(col.status_colaborador, 1) <> 1 then 'Desligado'
+                 when coalesce(col.status_ponto, 0) <> 1 then 'Fora do ponto'
+                 when exists (
+                   select 1 from dna_work.ferias f
+                   where f.id_colaborador = col.id_colaborador and replace(f.inicio, '-', '/') <= $4 and replace(f.fim, '-', '/') >= $4
+                 ) then case when coalesce(col.tipo_vaga, ultima.tipo_vaga)::text = '1' then 'Recesso' else 'Férias' end
+                 else 'Ativo'
+               end as situacao,
+               nullif(concat_ws(' · ', esc.nome, carga.nome), '') as jornada
+        from dna_work.colaborador col
+        join dna_work.candidato c on c.id_candidato = col.id_candidato
+        left join lateral (
+          select v.cargo, v.tipo_vaga, cv.datainicio
+          from dna_work.conratacaovaga cv
+          left join dna_work.vaga v on v.id_vaga = cv.id_vaga
+          where cv.id_candidato = col.id_candidato
+            and coalesce(nullif(btrim(cv.id_empresa), ''), v.id_empresa) = col.id_empresa
+          order by cv.data_contratacao desc nulls last
+          limit 1
+        ) ultima on true
+        left join dna_work.modalidade_vaga m on m.id::text = coalesce(col.tipo_vaga, ultima.tipo_vaga)::text
+        left join lateral (select escala from dna_work.carga_horaria ch where ch.id_colaborador = col.id_colaborador limit 1) ch on true
+        left join dna_work.ponto_turno_base esc on esc.id = ch.escala and esc.id_empresa = col.id_empresa
+        left join dna_work.ponto_carga_base carga on carga.id::text = col.carga_base::text and carga.id_empresa = col.id_empresa
+        where col.id_empresa = $1
+          and ($2 = '' or c.nome ilike $3 or coalesce(col.cargo, '') ilike $3 or coalesce(col.departamento, '') ilike $3)
+        order by col.id_candidato, case when col.status_colaborador = 1 then 0 else 1 end, col.data_cadastro desc nulls last, col.data_inicio desc nulls last
+      ) pessoas
+      where $5 = 'todos'
+         or ($5 = 'ativo' and situacao in ('Ativo', 'Férias', 'Recesso'))
+         or ($5 = 'inativo' and situacao not in ('Ativo', 'Férias', 'Recesso'))
+      order by nome
+    `, [empresaId, busca, `%${busca}%`, hoje, filtro]);
+    return rows.rows;
+  }
+
+  /** Colaborador do ponto pelo id_candidato da tela (o ativo primeiro, depois o mais recente). */
+  private async colaboradorDaEmpresa(empresaId: string, idCandidato: string) {
+    const rows = await this.db.query<{ id_colaborador: string; status_ponto: number | null; carga_base: string | null }>(`
+      select id_colaborador, status_ponto, carga_base::text as carga_base
+      from dna_work.colaborador
+      where id_candidato = $1 and id_empresa = $2
+      order by case when status_colaborador = 1 then 0 else 1 end, data_cadastro desc nulls last
+      limit 1
+    `, [idCandidato, empresaId]);
+    const colaborador = rows.rows[0];
+    if (!colaborador) throw new AppError(404, "COLABORADOR_NAO_ENCONTRADO", "Colaborador não encontrado nesta empresa.");
+    return colaborador;
+  }
+
+  /** Configuração do ponto da pessoa: se está no ponto, a jornada (escala + carga) e as férias. */
+  async configuracaoPonto(usuarioId: string, empresaId: string, idCandidato: string) {
+    await this.garantir(usuarioId, empresaId);
+    const colaborador = await this.colaboradorDaEmpresa(empresaId, idCandidato);
+    const [jornada, ferias] = await Promise.all([
+      this.db.query<{ escala: number | null }>("select escala from dna_work.carga_horaria where id_colaborador = $1 limit 1", [colaborador.id_colaborador]),
+      this.db.query<{ id: number; inicio: string; fim: string }>(
+        "select id, replace(inicio, '/', '-') as inicio, replace(fim, '/', '-') as fim from dna_work.ferias where id_colaborador = $1 order by inicio desc",
+        [colaborador.id_colaborador],
+      ),
+    ]);
+    const escala = jornada.rows[0]?.escala;
+    return {
+      noPonto: Number(colaborador.status_ponto) === 1,
+      escala: escala ? String(escala) : "",
+      carga: colaborador.carga_base && colaborador.carga_base !== "0" ? colaborador.carga_base : "",
+      ferias: ferias.rows,
+    };
+  }
+
+  /**
+   * Liga escala e carga horária à pessoa, no formato que o ponto e o relatório leem: dna_work.carga_horaria (tipo 1, cada dia
+   * "1" com a carga ou "folga") e colaborador.carga_base.
+   */
+  async salvarJornada(usuarioId: string, empresaId: string, idCandidato: string, body: Record<string, string>) {
+    await this.garantir(usuarioId, empresaId);
+    const colaborador = await this.colaboradorDaEmpresa(empresaId, idCandidato);
+    const campos: Record<string, string> = {};
+    const escala = (await this.db.query<Record<string, number | null>>(
+      "select segunda_feira, terca_feira, quarta_feira, quinta_feira, sexta_feira, sabado, domingo from dna_work.ponto_turno_base where id::text = $1 and id_empresa = $2",
+      [body.escala ?? "", empresaId],
+    )).rows[0];
+    if (!escala) campos.escala = "Escolha a escala.";
+    const carga = (await this.db.query("select 1 from dna_work.ponto_carga_base where id::text = $1 and id_empresa = $2", [body.carga ?? "", empresaId])).rowCount;
+    if (!carga) campos.carga = "Escolha a carga horária.";
+    const primeiro = Object.values(campos)[0];
+    if (primeiro) throw new AppError(422, "VALIDACAO", Object.keys(campos).length > 1 ? "Escolha a escala e a carga horária." : primeiro, campos);
+    const dias: Array<[string, string]> = [
+      ["segunda", "segunda_feira"], ["terca", "terca_feira"], ["quarta", "quarta_feira"], ["quinta", "quinta_feira"],
+      ["sexta", "sexta_feira"], ["sabado", "sabado"], ["domingo", "domingo"],
+    ];
+    const valores = dias.flatMap(([, coluna]) => (Number(escala![coluna]) === 1 ? ["1", body.carga] : ["folga", ""]));
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("delete from dna_work.carga_horaria where id_colaborador = $1", [colaborador.id_colaborador]);
+      await client.query(`
+        insert into dna_work.carga_horaria (
+          id_colaborador, tipo, escala, segunda, segunda_carga, terca, terca_carga, quarta, quarta_carga,
+          quinta, quinta_carga, sexta, sexta_carga, sabado, sabado_carga, domingo, domingo_carga
+        ) values ($1,'1',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+      `, [colaborador.id_colaborador, Number(body.escala), ...valores]);
+      await client.query("update dna_work.colaborador set carga_base = $2 where id_colaborador = $1", [colaborador.id_colaborador, Number(body.carga)]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    return { ok: true };
+  }
+
+  /**
+   * "Apagar" na tela = desligar. NÃO apaga nada: a Portaria MTP 671/2021 obriga a empresa a guardar e apresentar os
+   * registros de ponto (e a CLT permite cobrar até 5 anos para trás), então batidas, AFD, banco de horas, férias e
+   * atestados ficam. A pessoa sai da lista principal, não bate mais ponto e aparece no filtro "Desligados".
+   * Reativar não volta esta linha: o cadastro cria uma passagem nova (salvarColaborador com reativar), que começa do zero.
+   */
+  async desligarColaborador(usuarioId: string, empresaId: string, idCandidato: string) {
+    await this.garantir(usuarioId, empresaId);
+    await this.colaboradorDaEmpresa(empresaId, idCandidato);
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "update dna_work.colaborador set status_colaborador = 0, status_ponto = 0 where id_candidato = $1 and id_empresa = $2",
+        [idCandidato, empresaId],
+      );
+      // Sem outra empresa em que a pessoa siga ativa, ela deixa de aparecer como colaboradora.
+      await client.query(`
+        update dna_work.candidato set colaborador = 0
+        where id_candidato = $1
+          and not exists (select 1 from dna_work.colaborador c where c.id_candidato = $1 and c.status_colaborador = 1)
+      `, [idCandidato]);
+      await client.query("COMMIT");
+      return { ativo: false };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** Férias: período em dna_work.ferias. O ponto já bloqueia a batida nesses dias; o relatório mostra "Férias". */
+  async salvarFerias(usuarioId: string, empresaId: string, idCandidato: string, body: Record<string, string>) {
+    await this.garantir(usuarioId, empresaId);
+    const colaborador = await this.colaboradorDaEmpresa(empresaId, idCandidato);
+    const campos: Record<string, string> = {};
+    if (!dataValida(body.inicio)) campos.inicio = "Informe o primeiro dia de férias.";
+    if (!dataValida(body.fim)) campos.fim = "Informe o último dia de férias.";
+    else if (dataValida(body.inicio) && body.fim < body.inicio) campos.fim = "O último dia vem depois do primeiro.";
+    const primeiro = Object.values(campos)[0];
+    if (primeiro) throw new AppError(422, "VALIDACAO", Object.keys(campos).length > 1 ? "Informe o período das férias." : primeiro, campos);
+    const inicio = dataLegado(body.inicio);
+    const fim = dataLegado(body.fim);
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("select pg_advisory_xact_lock(hashtext('dna_work.ferias'))");
+      const sobreposta = await client.query(`
+        select 1 from dna_work.ferias
+        where id_colaborador = $1 and replace(inicio, '-', '/') <= $3 and replace(fim, '-', '/') >= $2
+        limit 1
+      `, [colaborador.id_colaborador, inicio, fim]);
+      if (sobreposta.rowCount) throw new AppError(409, "FERIAS_SOBREPOSTAS", "Já existe férias neste período.");
+      const id = Number((await client.query<{ id: string }>("select coalesce(max(id), 0) + 1 as id from dna_work.ferias")).rows[0].id);
+      await client.query(
+        "insert into dna_work.ferias (id, id_candidato, id_colaborador, inicio, fim) values ($1,$2,$3,$4,$5)",
+        [id, idCandidato, colaborador.id_colaborador, inicio, fim],
+      );
+      await client.query("COMMIT");
+      return { id };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async excluirFerias(usuarioId: string, empresaId: string, idCandidato: string, idFerias: string) {
+    await this.garantir(usuarioId, empresaId);
+    const colaborador = await this.colaboradorDaEmpresa(empresaId, idCandidato);
+    const apagada = await this.db.query("delete from dna_work.ferias where id::text = $1 and id_colaborador = $2", [idFerias, colaborador.id_colaborador]);
+    if (!apagada.rowCount) throw new AppError(404, "FERIAS_NAO_ENCONTRADAS", "Férias não encontradas.");
+    return { id: idFerias };
   }
 
   async vagas(usuarioId: string, empresaId: string, busca: string) {
@@ -366,14 +584,68 @@ export class PortalDadosService {
     return rows.rows;
   }
 
+  /** Escala: dna_work.ponto_turno_base guarda 1 (trabalha) ou 0 (folga) em cada dia da semana. */
   async salvarEscala(usuarioId: string, empresaId: string, body: Record<string, string>) {
     await this.garantir(usuarioId, empresaId);
+    const nome = (body.nome ?? "").trim().slice(0, 255);
+    if (nome.length < 2) throw new AppError(422, "VALIDACAO", "Informe o nome da escala.", { nome: "Informe o nome da escala." });
+    const dias = ["segunda", "terca", "quarta", "quinta", "sexta", "sabado", "domingo"].map((chave) => (body[chave] === "1" ? 1 : 0));
+    if (!dias.some(Boolean)) throw new AppError(422, "VALIDACAO", "Marque pelo menos um dia de trabalho.");
     const id = await this.proximo("ponto_turno_base", "id");
     await this.db.query(`
       insert into dna_work.ponto_turno_base
         (id, nome, id_empresa, segunda_feira, terca_feira, quarta_feira, quinta_feira, sexta_feira, sabado, domingo)
       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-    `, [id, body.nome, empresaId, dia(body.segunda), dia(body.terca), dia(body.quarta), dia(body.quinta), dia(body.sexta), dia(body.sabado), dia(body.domingo)]);
+    `, [id, nome, empresaId, ...dias]);
+    return { id };
+  }
+
+  /** Apaga a escala da empresa. Escala ligada a colaborador ou a dia marcado não sai: o ponto deixaria de saber os dias de folga. */
+  async excluirEscala(usuarioId: string, empresaId: string, id: string) {
+    await this.garantir(usuarioId, empresaId);
+    const uso = await this.db.query<{ colaboradores: number; dias: number }>(`
+      select
+        (select count(*)::int from dna_work.carga_horaria ch
+           join dna_work.colaborador col on col.id_colaborador = ch.id_colaborador
+          where ch.escala::text = $1 and col.id_empresa = $2) as colaboradores,
+        (select count(*)::int from dna_work.ponto_data_trabalho d
+           join dna_work.colaborador col on col.id_colaborador = d.id_colaborador
+          where d.id_escala::text = $1 and col.id_empresa = $2) as dias
+    `, [id, empresaId]);
+    const { colaboradores, dias } = uso.rows[0];
+    if (colaboradores || dias) {
+      throw new AppError(409, "ESCALA_EM_USO", colaboradores
+        ? `Esta escala está em uso por ${colaboradores} ${colaboradores === 1 ? "colaborador" : "colaboradores"}. Troque a escala deles antes de apagar.`
+        : "Esta escala está marcada em dias de trabalho de colaboradores e não pode ser apagada.");
+    }
+    const apagada = await this.db.query("delete from dna_work.ponto_turno_base where id::text = $1 and id_empresa = $2", [id, empresaId]);
+    if (!apagada.rowCount) throw new AppError(404, "ESCALA_NAO_ENCONTRADA", "Escala não encontrada.");
+    return { id };
+  }
+
+  /** Apaga a carga horária. Carga usada por colaborador, dia marcado ou batida já registrada não sai: o histórico do ponto depende dela. */
+  async excluirCarga(usuarioId: string, empresaId: string, id: string) {
+    await this.garantir(usuarioId, empresaId);
+    const uso = await this.db.query<{ colaboradores: number; batidas: number }>(`
+      select
+        (select count(distinct col.id_colaborador)::int from dna_work.colaborador col
+           left join dna_work.carga_horaria ch on ch.id_colaborador = col.id_colaborador
+          where col.id_empresa = $2
+            and (col.carga_base::text = $1
+              or $1 in (ch.segunda_carga::text, ch.terca_carga::text, ch.quarta_carga::text, ch.quinta_carga::text,
+                        ch.sexta_carga::text, ch.sabado_carga::text, ch.domingo_carga::text)
+              or exists (select 1 from dna_work.ponto_data_trabalho d where d.id_colaborador = col.id_colaborador and d.id_carga_horaria::text = $1))) as colaboradores,
+        (select count(*)::int from dna_work.tabela_ponto t
+           join dna_work.colaborador col on col.id_colaborador = t.id_colaborador
+          where t.id_carga::text = $1 and col.id_empresa = $2) as batidas
+    `, [id, empresaId]);
+    const { colaboradores, batidas } = uso.rows[0];
+    if (batidas) throw new AppError(409, "CARGA_COM_BATIDAS", "Esta carga horária já tem batidas de ponto registradas e não pode ser apagada.");
+    if (colaboradores) {
+      throw new AppError(409, "CARGA_EM_USO", `Esta carga horária está em uso por ${colaboradores} ${colaboradores === 1 ? "colaborador" : "colaboradores"}. Troque a carga deles antes de apagar.`);
+    }
+    const apagada = await this.db.query("delete from dna_work.ponto_carga_base where id::text = $1 and id_empresa = $2", [id, empresaId]);
+    if (!apagada.rowCount) throw new AppError(404, "CARGA_NAO_ENCONTRADA", "Carga horária não encontrada.");
     return { id };
   }
 
@@ -392,33 +664,114 @@ export class PortalDadosService {
     await this.garantir(usuarioId, empresaId);
     const pausa = body.pausa === "1" ? 1 : 0;
     const saida = body.saida;
+    const hora = /^([01]\d|2[0-3]):[0-5]\d$/;
+    const campos: Record<string, string> = {};
+    if ((body.nome ?? "").trim().length < 2) campos.nome = "Informe o nome da carga horária.";
+    if (!hora.test(body.entrada ?? "")) campos.entrada = "Informe a entrada.";
+    if (!hora.test(saida ?? "")) campos.saida = "Informe a saída.";
+    if (body.pausa !== "1" && body.pausa !== "0") campos.pausa = "Diga se há pausa para refeição.";
+    if (pausa && !hora.test(body.saidaRefeicao ?? "")) campos.saidaRefeicao = "Informe a saída para a refeição.";
+    if (pausa && !hora.test(body.retornoRefeicao ?? "")) campos.retornoRefeicao = "Informe o retorno da refeição.";
+    if (body.tolerancia && !/^\d{1,3}$/.test(body.tolerancia.trim())) campos.tolerancia = "Use só números (minutos).";
+    const primeiro = Object.values(campos)[0];
+    if (primeiro) throw new AppError(422, "VALIDACAO", Object.keys(campos).length > 1 ? "Confira os campos marcados." : primeiro, campos);
     const id = await this.proximo("ponto_carga_base", "id");
     await this.db.query(`
       insert into dna_work.ponto_carga_base
         (id, id_empresa, nome, tipo, entrada, saida_refeicao, retorno_refeicao, saida, tolerancia, pausa)
       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
     `, [
-      id, empresaId, body.nome, body.tipo === "Noturno" ? "Noturno" : "Diurno",
+      id, empresaId, body.nome, tipoDaJornada(body.entrada, saida),
       body.entrada, pausa ? body.saidaRefeicao : saida, pausa ? body.retornoRefeicao : saida, saida, body.tolerancia || "0", pausa,
     ]);
     return { id };
   }
 
-  async feriados(usuarioId: string, empresaId: string) {
-    await this.garantir(usuarioId, empresaId);
-    const rows = await this.db.query(`
-      select id_feriado as id, nome, data from dna_work.feriados where id_empresa = $1 order by data
+  /** Feriados cadastrados pela empresa, como estão no banco (fixo = repete todo ano; facultativo = não para o ponto). */
+  private async feriadosCadastrados(empresaId: string) {
+    const rows = await this.db.query<{
+      id: number; nome: string | null; data: string | null; tipo: string | null; estado: string | null; cidade: string | null; fixo: number | null; facultativo: number | null;
+    }>(`
+      select id_feriado as id, nome, data, tipo, estado, cidade, fixo, facultativo
+      from dna_work.feriados where id_empresa = $1
     `, [empresaId]);
-    return rows.rows;
+    return rows.rows
+      .map((linha) => ({ ...linha, iso: isoDe(linha.data), fixo: Number(linha.fixo) === 1, facultativo: Number(linha.facultativo) === 1 }))
+      .filter((linha) => linha.iso);
+  }
+
+  /** Calendário do ano: nacionais (BrasilAPI) e os cadastrados pela empresa, já com a data daquele ano. */
+  async feriados(usuarioId: string, empresaId: string, anoInformado?: string) {
+    await this.garantir(usuarioId, empresaId);
+    const ano = /^\d{4}$/.test(anoInformado ?? "") ? Number(anoInformado) : Number(dataSp(0).slice(0, 4));
+    const [nacionais, cadastrados] = await Promise.all([feriadosNacionais(ano), this.feriadosCadastrados(empresaId)]);
+    const doAno = cadastrados
+      .map((linha) => ({ linha, data: dataNoAno(linha.iso!, linha.fixo, ano) }))
+      .filter((item): item is { linha: (typeof cadastrados)[number]; data: string } => Boolean(item.data))
+      .map(({ linha, data }) => ({
+        id: linha.id,
+        data,
+        nome: (linha.nome ?? "").trim() || "Feriado",
+        abrangencia: (ABRANGENCIAS as readonly string[]).includes(linha.tipo ?? "") ? linha.tipo : "empresa",
+        local: [linha.cidade, linha.estado].filter(Boolean).join(" / ") || null,
+        fixo: linha.fixo,
+        facultativo: linha.facultativo,
+      }))
+      .sort((a, b) => a.data.localeCompare(b.data));
+    return { ano, nacionais: nacionais.lista, nacionaisDisponiveis: nacionais.ok, cadastrados: doAno };
   }
 
   async salvarFeriado(usuarioId: string, empresaId: string, body: Record<string, string>) {
     await this.garantir(usuarioId, empresaId);
+    const campos: Record<string, string> = {};
+    const nome = (body.nome ?? "").trim().slice(0, 100);
+    if (nome.length < 2) campos.nome = "Informe o nome do feriado.";
+    if (!dataValida(body.data)) campos.data = "Informe a data.";
+    const abrangencia = body.abrangencia as Abrangencia;
+    if (!ABRANGENCIAS.includes(abrangencia)) campos.abrangencia = "Diga se o feriado é municipal, estadual ou só da empresa.";
+    const primeiro = Object.values(campos)[0];
+    if (primeiro) throw new AppError(422, "VALIDACAO", Object.keys(campos).length > 1 ? "Confira os campos marcados." : primeiro, campos);
+    // Municipal e estadual ficam com a cidade e a UF da empresa (cada filial tem o próprio cadastro e os próprios feriados).
+    const empresa = (await this.db.query<{ cidade: string | null; uf: string | null }>(
+      "select cidade, uf from dna_work.empresa where id_empresa = $1", [empresaId],
+    )).rows[0];
+    const estado = abrangencia === "empresa" ? null : (empresa?.uf ?? "").trim().toUpperCase().slice(0, 10) || null;
+    const cidade = abrangencia === "municipal" ? (empresa?.cidade ?? "").trim().slice(0, 200) || null : null;
     const id = await this.proximo("feriados", "id_feriado");
     await this.db.query(`
-      insert into dna_work.feriados (id_feriado, nome, data, id_empresa) values ($1,$2,$3,$4)
-    `, [id, body.nome, dataLegado(body.data), empresaId]);
+      insert into dna_work.feriados (id_feriado, nome, data, id_empresa, tipo, estado, cidade, fixo, facultativo)
+      values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+    `, [id, nome, dataLegado(body.data), empresaId, abrangencia, estado, cidade, body.fixo === "1" ? 1 : 0, body.facultativo === "1" ? 1 : 0]);
     return { id };
+  }
+
+  async excluirFeriado(usuarioId: string, empresaId: string, id: string) {
+    await this.garantir(usuarioId, empresaId);
+    const apagado = await this.db.query("delete from dna_work.feriados where id_feriado::text = $1 and id_empresa = $2", [id, empresaId]);
+    if (!apagado.rowCount) throw new AppError(404, "FERIADO_NAO_ENCONTRADO", "Feriado não encontrado.");
+    return { id };
+  }
+
+  /**
+   * Dias (YYYY/MM/DD) que contam como feriado no ponto: nacionais e os cadastrados pela empresa, sem os pontos facultativos.
+   * Fixo vale em todos os anos do período.
+   */
+  private async diasDeFeriado(empresaId: string, chaves: string[]) {
+    const anos = [...new Set(chaves.map((chave) => Number(chave.slice(0, 4))))];
+    const [nacionais, cadastrados] = await Promise.all([
+      Promise.all(anos.map((ano) => feriadosNacionais(ano))),
+      this.feriadosCadastrados(empresaId),
+    ]);
+    const dias = new Set<string>();
+    for (const lista of nacionais) for (const feriado of lista.lista) dias.add(feriado.data.replaceAll("-", "/"));
+    for (const linha of cadastrados) {
+      if (linha.facultativo) continue;
+      for (const ano of anos) {
+        const data = dataNoAno(linha.iso!, linha.fixo, ano);
+        if (data) dias.add(data.replaceAll("-", "/"));
+      }
+    }
+    return new Set(chaves.filter((chave) => dias.has(chave)));
   }
 
   async salvarColaborador(usuarioId: string, empresaId: string, body: Record<string, string>) {
@@ -429,12 +782,29 @@ export class PortalDadosService {
     if (nome.length < 2) throw new AppError(422, "NOME_CURTO", "Informe o nome do colaborador.");
     if (cpf.length !== 11) throw new AppError(422, "CPF_INVALIDO", "Informe o CPF com 11 números.");
     if (cargo.length < 2) throw new AppError(422, "CARGO_CURTO", "Informe o cargo.");
+    // Modalidade decide férias (CLT) ou recesso (estágio): sem contratação pela DNA, só vem daqui.
+    if (body.modalidade !== "1" && body.modalidade !== "2") {
+      throw new AppError(422, "VALIDACAO", "Escolha a modalidade.", { modalidade: "Escolha CLT ou Estágio." });
+    }
     const existente = await this.db.query<{ id_candidato: string }>(`
       select id_candidato from dna_work.candidato
       where regexp_replace(coalesce(cpf, ''), '\\D', '', 'g') = $1
       limit 1
     `, [cpf]);
     const idCandidato = existente.rows[0]?.id_candidato ?? crypto.randomUUID();
+    if (existente.rows[0]) {
+      // Mesmo CPF já passou por esta empresa: ativo = cadastro repetido; desligado = pergunta se reativa.
+      const passagens = (await this.db.query<{ ativo: boolean }>(
+        "select coalesce(status_colaborador, 1) = 1 as ativo from dna_work.colaborador where id_candidato = $1 and id_empresa = $2",
+        [idCandidato, empresaId],
+      )).rows;
+      if (passagens.some((linha) => linha.ativo)) {
+        throw new AppError(409, "COLABORADOR_JA_CADASTRADO", "Já existe um colaborador ativo com este CPF.", { cpf: "Este CPF já está cadastrado." });
+      }
+      if (passagens.length && body.reativar !== "1") {
+        throw new AppError(409, "COLABORADOR_DESLIGADO", "Esta pessoa já trabalhou aqui e está desligada.");
+      }
+    }
     const inicio = body.inicio ? dataLegado(body.inicio) : dataLegado(new Date().toISOString().slice(0, 10));
     const client = await this.db.connect();
     try {
@@ -444,13 +814,25 @@ export class PortalDadosService {
           insert into dna_work.candidato (id_candidato, nome, cpf, email, celular, datacadastro, id_empresa, colaborador)
           values ($1,$2,$3,$4,$5,$6,$7,1)
         `, [idCandidato, nome, cpf, body.email?.trim() || null, (body.celular ?? "").trim().slice(0, 40) || null, inicio, empresaId]);
+      } else {
+        // Candidato já existente (desligado daqui ou vindo da base da DNA): passa a ser colaborador desta empresa,
+        // como o interno faz na contratação (o login do ponto exige candidato.id_empresa = empresa).
+        await client.query(
+          "update dna_work.candidato set colaborador = 1, id_empresa = $2 where id_candidato = $1",
+          [idCandidato, empresaId],
+        );
       }
       const idColaborador = crypto.randomUUID();
       await client.query(`
         insert into dna_work.colaborador
-          (id_colaborador, id_candidato, id_empresa, data_inicio, departamento, cargo, data_cadastro, status_ponto, status_colaborador)
-        values ($1,$2,$3,$4,$5,$6,$7,1,1)
-      `, [idColaborador, idCandidato, empresaId, inicio, body.departamento?.trim().slice(0, 255) || null, cargo, dataLegado(new Date().toISOString().slice(0, 10))]);
+          (id_colaborador, id_candidato, id_empresa, data_inicio, departamento, cargo, data_cadastro, status_ponto, status_colaborador, tipo_vaga)
+        values ($1,$2,$3,$4,$5,$6,$7,1,1,$8)
+      `, [
+        idColaborador, idCandidato, empresaId, inicio, body.departamento?.trim().slice(0, 255) || null, cargo,
+        dataLegado(new Date().toISOString().slice(0, 10)),
+        // Modalidade (dna_work.modalidade_vaga): 1 estágio, 2 CLT. Sem contratação pela DNA, é daqui que a lista tira a modalidade.
+        body.modalidade === "1" || body.modalidade === "2" ? Number(body.modalidade) : null,
+      ]);
       await client.query("COMMIT");
       return { id: idColaborador };
     } catch (error) {
@@ -598,16 +980,25 @@ export class PortalDadosService {
     return rows.rows;
   }
 
+  /**
+   * Relatório de ponto da pessoa. Cada contratação/reativação é uma passagem (linha própria em dna_work.colaborador, com
+   * batidas e saldo próprios). Sem filtro de data: só a passagem atual, a partir do início dela (quem foi reativado
+   * começa do zero). Com filtro de data: cada dia sai da passagem que valia naquele dia, para consultar o ponto de
+   * contratações anteriores (obrigação legal de guarda), sem misturar o saldo de uma com o da outra.
+   */
   async relatorioPontoColaborador(usuarioId: string, empresaId: string, idCandidato: string, de?: string, ate?: string) {
     await this.garantir(usuarioId, empresaId);
     const pessoa = await this.db.query<{
-      id_colaborador: string; nome: string | null; cargo: string | null; banco_horas: string | null;
+      id_colaborador: string; nome: string | null; cargo: string | null; banco_horas: string | null; modalidade: string | null; ativo: boolean;
+      cpf: string | null; email: string | null; celular: string | null; departamento: string | null; data_inicio: string | null;
     }>(`
-      select col.id_colaborador, c.nome, coalesce(nullif(btrim(col.cargo), ''), v.cargo) as cargo, col.banco_horas::text
+      select col.id_colaborador, c.nome, coalesce(nullif(btrim(col.cargo), ''), v.cargo) as cargo, col.banco_horas::text,
+             coalesce(col.tipo_vaga, v.tipo_vaga)::text as modalidade, coalesce(col.status_colaborador, 1) = 1 as ativo,
+             c.cpf, c.email, c.celular, col.departamento, replace(col.data_inicio, '/', '-') as data_inicio
       from dna_work.colaborador col
       join dna_work.candidato c on c.id_candidato = col.id_candidato
       left join lateral (
-        select v.cargo
+        select v.cargo, v.tipo_vaga
         from dna_work.conratacaovaga cv
         left join dna_work.vaga v on v.id_vaga = cv.id_vaga
         where cv.id_candidato = c.id_candidato
@@ -616,9 +1007,9 @@ export class PortalDadosService {
         limit 1
       ) v on true
       where col.id_candidato = $1 and col.id_empresa = $2
-      order by case when col.status_colaborador = 1 then 0 else 1 end, col.data_cadastro desc nulls last
-      limit 1
+      order by case when col.status_colaborador = 1 then 0 else 1 end, col.data_cadastro desc nulls last, col.data_inicio desc nulls last
     `, [idCandidato, empresaId]);
+    // A atual (ativa, ou a mais recente) vem primeiro.
     const colaborador = pessoa.rows[0];
     if (!colaborador) {
       const contrato = await this.db.query<{ nome: string | null; cargo: string | null }>(`
@@ -636,12 +1027,13 @@ export class PortalDadosService {
       `, [idCandidato, empresaId]);
       const linha = contrato.rows[0];
       if (!linha) throw new AppError(404, "COLABORADOR_NAO_ENCONTRADO", "Colaborador não encontrado nesta empresa.");
-      return { nome: linha.nome ?? "", cargo: linha.cargo ?? "", bancoHoras: false, semRegistro: true, de: de ?? "", ate: ate ?? "", dias: [] as never[] };
+      return { nome: linha.nome ?? "", cargo: linha.cargo ?? "", bancoHoras: false, semRegistro: true, estagio: false, desligado: false, de: de ?? "", ate: ate ?? "", dias: [] as never[] };
     }
 
     let fim = dataValida(ate) ?? dataSp(0);
     let inicio = dataValida(de) ?? dataSp(-6);
-    if (!dataValida(de) && !dataValida(ate)) {
+    const filtrou = Boolean(dataValida(de) || dataValida(ate));
+    if (!filtrou) {
       const ultimo = await this.db.query<{ data: string | null }>(`
         select max(data) as data from dna_work.banco_horas
         where id_colaborador = $1 and data ~ '^[0-9]{4}/[0-9]{2}/[0-9]{2}$'
@@ -652,79 +1044,110 @@ export class PortalDadosService {
         inicio = dataSpDe(registrada, -6);
       }
     }
-    const dias = intervalo(inicio, fim);
-    const chaves = dias.map((dia) => dia.replaceAll("-", "/"));
-    const [banco, pontos, escala, feriados, marcados, cargas] = await Promise.all([
-      this.db.query<{ data: string; horas_trabalhadas: string | null; saldo_dia: string | null; saldo_bh: string | null; folga: number | null; carga_horaria: number | null }>(`
-        select data, horas_trabalhadas, saldo_dia, saldo_bh, folga, carga_horaria
+    // De qual passagem é cada dia. Antes do início de todas, a pessoa não trabalhava aqui: o dia não entra.
+    const inicioDe = (linha: { data_inicio: string | null }) => (/^\d{4}-\d{2}-\d{2}$/.test(linha.data_inicio ?? "") ? linha.data_inicio! : "");
+    // Sem filtro, o período mostrado (e devolvido para a tela) começa no contrato atual.
+    if (!filtrou && inicioDe(colaborador) > inicio && inicioDe(colaborador) <= fim) inicio = inicioDe(colaborador);
+    const porInicio = [...pessoa.rows].sort((a, b) => inicioDe(a).localeCompare(inicioDe(b)));
+    const donoDoDia = (dia: string) => {
+      if (!filtrou) return !inicioDe(colaborador) || dia >= inicioDe(colaborador) ? colaborador : undefined;
+      let dono: (typeof pessoa.rows)[number] | undefined;
+      for (const linha of porInicio) if (!inicioDe(linha) || inicioDe(linha) <= dia) dono = linha;
+      // A atual vale do início dela em diante, mesmo que uma anterior tenha início mais tarde por erro de cadastro.
+      return inicioDe(colaborador) && dia >= inicioDe(colaborador) ? colaborador : dono;
+    };
+    const dias = intervalo(inicio, fim).flatMap((dia) => {
+      const dono = donoDoDia(dia);
+      return dono ? [{ iso: dia, dono }] : [];
+    });
+    const chaves = dias.map((dia) => dia.iso.replaceAll("-", "/"));
+    const ids = [...new Set(dias.map((dia) => dia.dono.id_colaborador))];
+    const [banco, pontos, escala, feriados, marcados, cargas, ferias] = await Promise.all([
+      this.db.query<{ id: string; data: string; horas_trabalhadas: string | null; saldo_dia: string | null; saldo_bh: string | null; folga: number | null; carga_horaria: number | null }>(`
+        select id_colaborador::text as id, data, horas_trabalhadas, saldo_dia, saldo_bh, folga, carga_horaria
         from dna_work.banco_horas
-        where id_colaborador = $1 and data = any($2::text[])
-      `, [colaborador.id_colaborador, chaves]),
-      this.db.query<{ data: string; entrada: string | null; saida: string | null; horas: string | null }>(`
-        select data,
+        where id_colaborador::text = any($1) and data = any($2::text[])
+      `, [ids, chaves]),
+      this.db.query<{ id: string; data: string; entrada: string | null; saida: string | null; horas: string | null }>(`
+        select id_colaborador::text as id, data,
                coalesce(nullif(btrim(entrada_editado), ''), entrada) as entrada,
                coalesce(nullif(btrim(saida_editado), ''), saida) as saida,
                horas_trabalhadas as horas
         from dna_work.tabela_ponto
-        where id_colaborador = $1 and data = any($2::text[]) and coalesce(excluido, 0) = 0
+        where id_colaborador::text = any($1) and data = any($2::text[]) and coalesce(excluido, 0) = 0
         order by data, id
-      `, [colaborador.id_colaborador, chaves]),
+      `, [ids, chaves]),
       this.db.query<Record<string, string | null>>(`
-        select segunda, segunda_carga::text, terca, terca_carga::text, quarta, quarta_carga::text,
+        select distinct on (id_colaborador) id_colaborador::text as id,
+               segunda, segunda_carga::text, terca, terca_carga::text, quarta, quarta_carga::text,
                quinta, quinta_carga::text, sexta, sexta_carga::text, sabado, sabado_carga::text, domingo, domingo_carga::text
-        from dna_work.carga_horaria where id_colaborador = $1 limit 1
-      `, [colaborador.id_colaborador]),
-      this.db.query<{ data: string }>(`select data from dna_work.feriados where id_empresa = $1 and data = any($2::text[])`, [empresaId, chaves]),
-      this.db.query<{ data: string; id_carga_horaria: string | null; id_escala: string | null }>(`
-        select replace(data, '-', '/') as data, id_carga_horaria::text, id_escala::text
+        from dna_work.carga_horaria where id_colaborador::text = any($1)
+      `, [ids]),
+      this.diasDeFeriado(empresaId, chaves),
+      this.db.query<{ id: string; data: string; id_carga_horaria: string | null; id_escala: string | null }>(`
+        select id_colaborador::text as id, replace(data, '-', '/') as data, id_carga_horaria::text, id_escala::text
         from dna_work.ponto_data_trabalho
-        where id_colaborador = $1 and replace(data, '-', '/') = any($2::text[])
-      `, [colaborador.id_colaborador, chaves]),
+        where id_colaborador::text = any($1) and replace(data, '-', '/') = any($2::text[])
+      `, [ids, chaves]),
       this.db.query<{ id: number; entrada: string | null; saida_refeicao: string | null; retorno_refeicao: string | null; saida: string | null }>(`
         select id, entrada, saida_refeicao, retorno_refeicao, saida from dna_work.ponto_carga_base where id_empresa = $1
       `, [empresaId]),
+      this.db.query<{ id: string; inicio: string; fim: string }>(
+        "select id_colaborador::text as id, replace(inicio, '-', '/') as inicio, replace(fim, '-', '/') as fim from dna_work.ferias where id_colaborador::text = any($1)",
+        [ids],
+      ),
     ]);
-    const porBanco = new Map(banco.rows.map((linha) => [linha.data, linha]));
+    const chave2 = (id: string, data: string) => `${id}|${data}`;
+    const porBanco = new Map(banco.rows.map((linha) => [chave2(linha.id, linha.data), linha]));
     const porPonto = new Map<string, Array<{ entrada: string | null; saida: string | null; horas: string | null }>>();
     for (const ponto of pontos.rows) {
-      const lista = porPonto.get(ponto.data) ?? [];
+      const lista = porPonto.get(chave2(ponto.id, ponto.data)) ?? [];
       lista.push(ponto);
-      porPonto.set(ponto.data, lista);
+      porPonto.set(chave2(ponto.id, ponto.data), lista);
     }
-    const porMarca = new Map(marcados.rows.map((linha) => [linha.data, linha]));
+    const porMarca = new Map(marcados.rows.map((linha) => [chave2(linha.id, linha.data), linha]));
     const porCarga = new Map(cargas.rows.map((linha) => [String(linha.id), linha]));
-    const feriado = new Set(feriados.rows.map((linha) => linha.data));
-    const semana = escala.rows[0];
+    const porEscala = new Map(escala.rows.map((linha) => [String(linha.id), linha]));
+    const feriado = feriados;
+    const emFerias = (id: string, chave: string) => ferias.rows.some((periodo) => periodo.id === id && periodo.inicio <= chave && periodo.fim >= chave);
     const usaBanco = colaborador.banco_horas === "1";
+    // Estagiário não tem férias da CLT: tem recesso (Lei 11.788/2008, art. 13). Modalidade 1 = Estágio.
+    const estagio = colaborador.modalidade === "1";
     const nomes = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"];
     const campos = ["domingo", "segunda", "terca", "quarta", "quinta", "sexta", "sabado"];
 
-    const linhas = dias.map((iso) => {
+    const linhas = dias.map(({ iso, dono }) => {
+      const id = dono.id_colaborador;
       const chave = iso.replaceAll("-", "/");
       const indice = new Date(`${iso}T12:00:00Z`).getUTCDay();
-      const batidas = porPonto.get(chave) ?? [];
-      const hora = porBanco.get(chave);
-      const marca = porMarca.get(chave);
+      const batidas = porPonto.get(chave2(id, chave)) ?? [];
+      const hora = porBanco.get(chave2(id, chave));
+      const marca = porMarca.get(chave2(id, chave));
+      const semana = porEscala.get(id);
       const campo = campos[indice];
       const trabalha = marca
         ? marca.id_escala === "1"
         : semana?.[campo] === "1";
       const idCarga = marca?.id_carga_horaria || (trabalha ? semana?.[`${campo}_carga`] : null) || (hora?.carga_horaria ? String(hora.carga_horaria) : null);
       const carga = idCarga && idCarga !== "0" ? porCarga.get(idCarga) : undefined;
-      const minutosCarga = feriado.has(chave) || !trabalha ? 0 : minutosDaCarga(carga);
+      const deFerias = emFerias(id, chave);
+      const minutosCarga = deFerias || feriado.has(chave) || !trabalha ? 0 : minutosDaCarga(carga);
       const minutosFeitos = minutosTrabalhados(batidas, hora?.horas_trabalhadas);
       const primeira = batidas[0];
       const segundaBatida = batidas[1];
       let situacao = "";
       if (!primeira?.entrada) {
-        if (feriado.has(chave)) situacao = "Feriado";
+        if (deFerias) situacao = dono.modalidade === "1" ? "Recesso" : "Férias";
+        else if (feriado.has(chave)) situacao = "Feriado";
         else if (!trabalha || hora?.folga === 1) situacao = "Folga";
-        else situacao = usaBanco ? "Banco de Horas" : "Faltou";
+        else situacao = dono.banco_horas === "1" ? "Banco de Horas" : "Faltou";
       }
       const saldo = hora?.saldo_dia ? saldoGravado(hora.saldo_dia) : { texto: relogio(Math.abs(minutosCarga - minutosFeitos)), negativo: minutosFeitos < minutosCarga };
       return {
         data: `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`,
         dia: nomes[indice],
+        // Dia de uma contratação anterior (aparece só quando a empresa filtra a data).
+        anterior: id !== colaborador.id_colaborador,
         situacao,
         entrada1: primeira?.entrada ?? "",
         saida1: primeira?.saida ?? "",
@@ -743,6 +1166,17 @@ export class PortalDadosService {
       cargo: colaborador.cargo ?? "",
       bancoHoras: usaBanco,
       semRegistro: false,
+      estagio,
+      desligado: !colaborador.ativo,
+      // Início do contrato atual: sem filtro de data o relatório começa nele.
+      inicioContrato: inicioDe(colaborador),
+      temAnterior: pessoa.rows.length > 1,
+      // Para o Reativar abrir o cadastro já preenchido.
+      cadastro: {
+        nome: colaborador.nome ?? "", cpf: colaborador.cpf ?? "", email: colaborador.email ?? "", celular: colaborador.celular ?? "",
+        cargo: colaborador.cargo ?? "", departamento: colaborador.departamento ?? "",
+        modalidade: colaborador.modalidade === "1" || colaborador.modalidade === "2" ? colaborador.modalidade : "",
+      },
       de: inicio,
       ate: fim,
       dias: linhas,
