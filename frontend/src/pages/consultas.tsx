@@ -3,6 +3,7 @@ import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { ApiError, api } from "../lib/api";
+import { filtrar } from "../lib/busca";
 import { dataBr, dinheiro, haQuantoTempo, primeiroNome } from "../lib/formato";
 import { Alerta, Badge, CabecalhoPagina, Card, Empty, FiltroChips, Input, Resumo, Skeleton, botao, chave } from "../components/ui";
 
@@ -189,22 +190,21 @@ export function Consulta({ titulo, descricao, caminho, colunas, linkNome, linkCo
   plural?: string;
   acoes?: ReactNode;
 }) {
-  const [q, setQ] = useState("");
+  // Busca inteligente: a lista vem inteira e filtra enquanto digita (sem acento, várias palavras, CPF, datas).
   const [busca, setBusca] = useState("");
   const [status, setStatus] = useState<"todos" | "ativo" | "inativo">(filtroStatus ? "ativo" : "todos");
   const lista = useQuery({
-    queryKey: [caminho, busca, filtroStatus ? status : ""],
-    queryFn: () => api<Linha[]>(`${caminho}?q=${encodeURIComponent(busca)}${filtroStatus ? `&status=${status}` : ""}`),
+    queryKey: [caminho, filtroStatus ? status : ""],
+    queryFn: () => api<Linha[]>(`${caminho}${filtroStatus ? `?status=${status}` : ""}`),
   });
-  const linhas = lista.data?.data ?? [];
+  const linhas = filtrar(lista.data?.data ?? [], busca);
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-5">
       <CabecalhoPagina titulo={titulo} descricao={descricao} acoes={acoes} />
       <Card className="flex flex-wrap items-center gap-3">
-        <form className="flex min-w-[16rem] flex-1 gap-2" onSubmit={(event) => { event.preventDefault(); setBusca(q.trim()); }}>
-          <CampoBusca valor={q} onChange={(valor) => { setQ(valor); if (!valor) setBusca(""); }} placeholder="Buscar por nome ou cargo" />
-          <button className={botao("secondary")}>Buscar</button>
-        </form>
+        <div className="flex min-w-[16rem] flex-1">
+          <CampoBusca valor={busca} onChange={setBusca} placeholder="Buscar por nome, cargo, CPF, jornada…" />
+        </div>
         {filtroStatus ? (
           <FiltroChips rotulo="Situação" valor={status} onChange={setStatus} opcoes={[{ id: "ativo", rotulo: "Ativos" }, { id: "inativo", rotulo: rotuloInativos }, { id: "todos", rotulo: "Todos" }]} />
         ) : null}

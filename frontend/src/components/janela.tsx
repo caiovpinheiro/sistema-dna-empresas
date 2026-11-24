@@ -6,11 +6,13 @@ import { useSearchParams } from "react-router-dom";
 /**
  * Janela (diálogo) por cima da página. Fecha no X, no Esc e clicando fora. No celular sobe de baixo e ocupa a largura.
  */
-export function Janela({ titulo, descricao, aberta, onFechar, children }: {
+export function Janela({ titulo, descricao, aberta, onFechar, larga = false, children }: {
   titulo: string;
   descricao?: string;
   aberta: boolean;
   onFechar: () => void;
+  /** Mais espaço no computador (ex.: a grade de dias da jornada). */
+  larga?: boolean;
   children: ReactNode;
 }) {
   const idTitulo = useId();
@@ -50,7 +52,7 @@ export function Janela({ titulo, descricao, aberta, onFechar, children }: {
         role="dialog"
         aria-modal="true"
         aria-labelledby={idTitulo}
-        className="grid max-h-[92vh] w-full gap-4 overflow-y-auto rounded-t-2xl bg-[#f6f4f8] p-4 shadow-2xl sm:max-w-3xl sm:rounded-2xl sm:p-5"
+        className={`grid max-h-[92vh] w-full gap-4 overflow-y-auto rounded-t-2xl bg-[#f6f4f8] p-4 shadow-2xl sm:rounded-2xl sm:p-5 ${larga ? "sm:max-w-5xl" : "sm:max-w-3xl"}`}
       >
         <div className="flex items-start justify-between gap-3">
           <div className="grid gap-1">

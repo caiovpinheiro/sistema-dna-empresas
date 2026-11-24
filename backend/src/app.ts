@@ -216,11 +216,39 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
     const busca = ler(z.object({ q: z.string().optional() }), request.query).q?.trim() ?? "";
     return { success: true, data: await dados.contratados(request.user.sub, request.user.empresaId!, busca) };
   });
-  app.get("/api/v1/empresa/escalas", async (request) => ({ success: true, data: await dados.escalas(request.user.sub, request.user.empresaId!) }));
-  app.post("/api/v1/empresa/escalas", async (request) => ({ success: true, data: await dados.salvarEscala(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
-  app.get("/api/v1/empresa/cargas", async (request) => ({ success: true, data: await dados.cargas(request.user.sub, request.user.empresaId!) }));
-  app.post("/api/v1/empresa/cargas", async (request) => ({ success: true, data: await dados.salvarCarga(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
-  app.get("/api/v1/empresa/ponto/relatorio", async (request) => ({ success: true, data: await dados.relatorioPonto(request.user.sub, request.user.empresaId!) }));
+  // Jornada de trabalho = dias de trabalho + horário de cada dia (escala e carga horária num cadastro só).
+  app.get("/api/v1/empresa/jornadas", async (request) => ({ success: true, data: await dados.jornadas(request.user.sub, request.user.empresaId!) }));
+  app.get("/api/v1/empresa/jornadas/:id", async (request) => {
+    const { id } = request.params as { id: string };
+    return { success: true, data: await dados.jornada(request.user.sub, request.user.empresaId!, id) };
+  });
+  app.post("/api/v1/empresa/jornadas", async (request) => ({ success: true, data: await dados.salvarJornadaEmpresa(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
+  app.put("/api/v1/empresa/jornadas/:id", async (request) => {
+    const { id } = request.params as { id: string };
+    return { success: true, data: await dados.salvarJornadaEmpresa(request.user.sub, request.user.empresaId!, corpo(request.body), id) };
+  });
+  app.delete("/api/v1/empresa/jornadas/:id", async (request) => {
+    const { id } = request.params as { id: string };
+    return { success: true, data: await dados.excluirJornada(request.user.sub, request.user.empresaId!, id) };
+  });
+  app.get("/api/v1/empresa/ponto/solicitacoes", async (request) => {
+    const { situacao } = ler(z.object({ situacao: z.enum(["pendentes", "todas"]).optional() }), request.query);
+    return { success: true, data: await dados.solicitacoesPonto(request.user.sub, request.user.empresaId!, situacao ?? "pendentes") };
+  });
+  app.post("/api/v1/empresa/ponto/solicitacoes/:id", async (request) => {
+    const { id } = ler(z.object({ id: z.coerce.number().int().positive() }), request.params);
+    const body = ler(z.object({ aprovar: z.boolean(), resposta: z.string().max(255).optional() }), request.body);
+    return { success: true, data: await dados.responderSolicitacao(request.user.sub, request.user.empresaId!, id, body.aprovar, body.resposta ?? "") };
+  });
+  app.post("/api/v1/empresa/ponto/inclusoes/:id", async (request) => {
+    const { id } = ler(z.object({ id: z.coerce.number().int().positive() }), request.params);
+    const body = ler(z.object({ aprovar: z.boolean(), resposta: z.string().max(255).optional() }), request.body);
+    return { success: true, data: await dados.responderInclusao(request.user.sub, request.user.empresaId!, id, body.aprovar, body.resposta ?? "") };
+  });
+  app.get("/api/v1/empresa/ponto/relatorio", async (request) => {
+    const periodo = ler(z.object({ de: z.string().optional(), ate: z.string().optional() }), request.query);
+    return { success: true, data: await dados.relatorioPonto(request.user.sub, request.user.empresaId!, periodo.de, periodo.ate) };
+  });
   // Configuração do ponto de uma pessoa (:id = id_candidato, o mesmo da tela do relatório).
   app.get("/api/v1/empresa/ponto/colaborador/:id/configuracao", async (request) => {
     const { id } = request.params as { id: string };
@@ -231,9 +259,15 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
     return { success: true, data: await dados.salvarJornada(request.user.sub, request.user.empresaId!, id, corpo(request.body)) };
   });
   // "Apagar" na tela = desligar: os registros de ponto ficam guardados (obrigação legal da empresa).
+  app.post("/api/v1/empresa/ponto/colaborador/:id/senha", async (request) => {
+    const { id } = request.params as { id: string };
+    const body = ler(z.object({ senha: z.string().max(200) }), request.body);
+    return { success: true, data: await dados.redefinirSenhaColaborador(request.user.sub, request.user.empresaId!, id, body.senha) };
+  });
   app.post("/api/v1/empresa/ponto/colaborador/:id/desligar", async (request) => {
     const { id } = request.params as { id: string };
-    return { success: true, data: await dados.desligarColaborador(request.user.sub, request.user.empresaId!, id) };
+    const body = ler(z.object({ ultimoDia: z.string().optional() }), request.body ?? {});
+    return { success: true, data: await dados.desligarColaborador(request.user.sub, request.user.empresaId!, id, body.ultimoDia) };
   });
   app.post("/api/v1/empresa/ponto/colaborador/:id/ferias", async (request) => {
     const { id } = request.params as { id: string };
@@ -265,14 +299,6 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   app.get("/api/v1/empresa/feriados", async (request) => {
     const { ano } = request.query as { ano?: string };
     return { success: true, data: await dados.feriados(request.user.sub, request.user.empresaId!, ano) };
-  });
-  app.delete("/api/v1/empresa/escalas/:id", async (request) => {
-    const { id } = request.params as { id: string };
-    return { success: true, data: await dados.excluirEscala(request.user.sub, request.user.empresaId!, id) };
-  });
-  app.delete("/api/v1/empresa/cargas/:id", async (request) => {
-    const { id } = request.params as { id: string };
-    return { success: true, data: await dados.excluirCarga(request.user.sub, request.user.empresaId!, id) };
   });
   app.delete("/api/v1/empresa/feriados/:id", async (request) => {
     const { id } = request.params as { id: string };
@@ -319,7 +345,6 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   }));
   app.post("/api/v1/ponto/bater", async (request) => {
     const body = ler(z.object({
-      pin: z.string().trim().min(1).max(20),
       confirmar: z.boolean().optional(),
       latitude: z.number().finite().optional(),
       longitude: z.number().finite().optional(),
@@ -327,8 +352,34 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
     const dispositivo = String(request.headers["user-agent"] ?? "").slice(0, 100);
     return {
       success: true,
-      data: await ponto.bater(request.pontoColaborador!.sub, body.pin, body.confirmar === true, body.latitude ?? null, body.longitude ?? null, dispositivo),
+      data: await ponto.bater(request.pontoColaborador!.sub, body.confirmar === true, body.latitude ?? null, body.longitude ?? null, dispositivo),
     };
+  });
+  app.post("/api/v1/ponto/senha", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request) => {
+    const body = ler(z.object({ senhaAtual: z.string().min(1).max(200), senhaNova: z.string().min(1).max(200) }), request.body);
+    return { success: true, data: await ponto.trocarSenha(request.pontoColaborador!.sub, body.senhaAtual, body.senhaNova) };
+  });
+  app.get("/api/v1/ponto/solicitacoes", async (request) => ({
+    success: true,
+    data: await ponto.solicitacoes(request.pontoColaborador!.sub),
+  }));
+  app.post("/api/v1/ponto/solicitacoes", async (request) => {
+    const body = ler(z.object({
+      idPonto: z.number().int().positive(),
+      tipo: z.enum(["entrada", "saida"]),
+      hora: z.string().trim().max(5),
+      motivo: z.string().max(255),
+    }), request.body);
+    return { success: true, data: await ponto.solicitar(request.pontoColaborador!.sub, body) };
+  });
+  app.post("/api/v1/ponto/inclusoes", async (request) => {
+    const body = ler(z.object({
+      data: z.string().trim().max(10),
+      entrada: z.string().trim().max(5),
+      saida: z.string().trim().max(5),
+      motivo: z.string().max(255),
+    }), request.body);
+    return { success: true, data: await ponto.incluir(request.pontoColaborador!.sub, body) };
   });
 
   await servirFrontend(app);

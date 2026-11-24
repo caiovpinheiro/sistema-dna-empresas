@@ -1,14 +1,75 @@
-import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { AppError } from "../lib/errors.js";
+import { SENHA_MINIMA, gravarSenha, guardarHash, senhaConfere } from "../lib/senha-colaborador.js";
 
 export type SessaoPonto = {
   nome: string;
   empresa: string;
   acao: "entrada" | "saida" | "bloqueado";
   motivo: string | null;
+  /** Senha provisória (gerada pelo interno ou redefinida): a pessoa troca antes de usar o app. */
+  trocarSenha: boolean;
+  /** Dias anteriores com entrada e sem saída, ainda sem pedido: o app avisa para pedir o ajuste. */
+  saidasPendentes: Array<{ id: number; data: string; entrada: string }>;
   registros: RegistroPonto[];
 };
+
+/**
+ * Pedido do colaborador. "ajuste" corrige o horário de uma batida (tabela antiga "justificativa", que o interno
+ * também lê); "inclusao" pede um período esquecido inteiro (tabela ponto_inclusao).
+ */
+export type Solicitacao = {
+  chave: string;
+  origem: "ajuste" | "inclusao";
+  dataIso: string;
+  data: string;
+  titulo: string;
+  detalhe: string;
+  motivo: string;
+  situacao: "Pendente" | "Aprovada" | "Recusada";
+  resposta: string | null;
+};
+
+/** Horário que vale de cada lado da batida: o corrigido (aprovado pela empresa) ou o do relógio. */
+const ENTRADA = "coalesce(nullif(btrim(t.entrada_editado), ''), t.entrada)";
+const SAIDA = "coalesce(nullif(btrim(t.saida_editado), ''), t.saida)";
+
+/** Segundos do dia de "HH:MM" ou "HH:MM:SS". */
+function noDia(hora: string) {
+  const [h, m, s] = hora.split(":").map(Number);
+  return (h || 0) * 3600 + (m || 0) * 60 + (s || 0);
+}
+
+/**
+ * Recusa um período que se sobrepõe a uma batida do dia ou a outra inclusão ainda pendente. Saída menor que a
+ * entrada = passou da meia-noite.
+ */
+export async function conferirSobreposicao(db: { query: PoolClient["query"] }, idColaborador: string, data: string, entrada: string, saida: string) {
+  const intervalo = (de: string, ate: string | null) => {
+    const inicio = noDia(de);
+    if (!ate) return [inicio, inicio] as const;
+    const fim = noDia(ate);
+    return [inicio, fim > inicio ? fim : fim + 86_400] as const;
+  };
+  const novo = intervalo(entrada, saida);
+  const existentes = await db.query<{ entrada: string | null; saida: string | null; origem: string }>(`
+    select ${ENTRADA} as entrada, ${SAIDA} as saida, 'batida' as origem
+    from dna_work.tabela_ponto t
+    where t.id_colaborador = $1 and t.data = $2 and coalesce(t.excluido, 0) = 0
+    union all
+    select entrada, saida, 'pedido' from dna_work.ponto_inclusao where id_colaborador = $1 and data = $2 and aceite is null
+  `, [idColaborador, data]);
+  for (const linha of existentes.rows) {
+    if (!linha.entrada) continue;
+    const [inicio, fim] = intervalo(linha.entrada, linha.saida);
+    if (novo[0] <= fim && inicio <= novo[1]) {
+      const quando = `${linha.entrada.slice(0, 5)}${linha.saida ? ` às ${linha.saida.slice(0, 5)}` : ""}`;
+      throw new AppError(409, "SOBREPOSICAO", linha.origem === "pedido"
+        ? `Já existe um pedido de inclusão nesse dia (${quando}) esperando a empresa.`
+        : `Esse horário bate com uma marcação que já existe nesse dia (${quando}). Para corrigir uma batida, use "Corrigir uma batida".`);
+    }
+  }
+}
 
 type RegistroPonto = {
   id: number;
@@ -25,8 +86,10 @@ type ColaboradorPonto = {
   id_empresa: string;
   nome: string;
   empresa: string;
-  pin: string | number | null;
   cpf: string | null;
+  atualiza_senha: number | null;
+  /** Início do contrato, "AAAA/MM/DD". */
+  inicio?: string | null;
 };
 
 type Batida = {
@@ -47,8 +110,8 @@ export class PontoColaboradorService {
   async login(cpf: string, senha: string): Promise<ColaboradorPonto> {
     const digitos = cpf.replace(/\D/g, "");
     if (digitos.length < 11) throw new AppError(401, "LOGIN_INVALIDO", "CPF ou senha inválidos.");
-    const encontrado = await this.db.query<ColaboradorPonto & { senha: string | null }>(`
-      select col.id_colaborador, c.id_candidato, col.id_empresa, c.senha, col.pin, c.cpf,
+    const encontrado = await this.db.query<ColaboradorPonto & { senha: string | null; senha_hash: string | null }>(`
+      select col.id_colaborador, c.id_candidato, col.id_empresa, c.senha, c.senha_hash, c.cpf, c.atualiza_senha,
              case when c.usanomesocial::text = '1' then coalesce(nullif(c.nomesocial, ''), c.nome) else c.nome end as nome,
              coalesce(e.nome_fantasia, e.razao_social, 'Empresa') as empresa
       from dna_work.candidato c
@@ -62,18 +125,18 @@ export class PontoColaboradorService {
       limit 1
     `, [digitos]);
     const pessoa = encontrado.rows[0];
-    const hash = createHash("md5").update(senha).digest("hex");
-    if (!pessoa?.senha || pessoa.senha.toLowerCase() !== hash) {
-      throw new AppError(401, "LOGIN_INVALIDO", "CPF ou senha inválidos.");
-    }
+    const conferida = pessoa ? await senhaConfere(pessoa, senha) : { ok: false, temHash: false };
+    if (!pessoa || !conferida.ok) throw new AppError(401, "LOGIN_INVALIDO", "CPF ou senha inválidos.");
+    // Ainda no MD5 (ou com o MD5 antigo guardado junto): passa para o Argon2id e apaga o MD5.
+    if (!conferida.temHash || pessoa.senha) await guardarHash(this.db, pessoa.id_candidato, senha);
     return {
       id_colaborador: pessoa.id_colaborador,
       id_candidato: pessoa.id_candidato,
       id_empresa: pessoa.id_empresa,
       nome: pessoa.nome,
       empresa: pessoa.empresa,
-      pin: pessoa.pin,
       cpf: pessoa.cpf,
+      atualiza_senha: pessoa.atualiza_senha,
     };
   }
 
@@ -82,14 +145,206 @@ export class PontoColaboradorService {
     const agora = agoraSp();
     const bloqueio = await this.bloqueio(idColaborador, agora.legado);
     const registros = await this.registros(idColaborador);
-    if (bloqueio) return { nome: pessoa.nome, empresa: pessoa.empresa, acao: "bloqueado", motivo: bloqueio, registros };
+    const trocarSenha = Number(pessoa.atualiza_senha) === 1;
+    const saidasPendentes = await this.saidasPendentes(idColaborador, agora);
+    const base = { nome: pessoa.nome, empresa: pessoa.empresa, trocarSenha, saidasPendentes, registros };
+    if (bloqueio) return { ...base, acao: "bloqueado", motivo: bloqueio };
     const decisao = await this.decidir(idColaborador, agora);
-    return { nome: pessoa.nome, empresa: pessoa.empresa, acao: decisao.tipo, motivo: null, registros };
+    return { ...base, acao: decisao.tipo, motivo: null };
   }
 
-  async bater(idColaborador: string, pin: string, confirmar: boolean, latitude: number | null, longitude: number | null, dispositivo: string) {
+  /**
+   * Batidas de dias anteriores (últimos 60) que ficaram sem saída e ainda sem pedido de ajuste: o app avisa a pessoa.
+   * O sistema não fecha sozinho: a saída só entra pelo pedido aprovado pela empresa.
+   */
+  private async saidasPendentes(idColaborador: string, agora: { iso: string; legado: string; hora: string }) {
+    const ontem = diaAnteriorN(agora.iso, 1);
+    const linhas = await this.db.query<{ id: number; data: string; entrada: string | null; id_carga: string | null }>(`
+      select t.id, t.data, ${ENTRADA} as entrada, t.id_carga
+      from dna_work.tabela_ponto t
+      where t.id_colaborador = $1 and coalesce(t.excluido, 0) = 0 and t.data >= $2 and t.data < $3
+        and coalesce(${SAIDA}, '') = '' and coalesce(${ENTRADA}, '') <> ''
+        and not exists (select 1 from dna_work.justificativa j where j.id_ponto = t.id and j.tipo = 'saida' and coalesce(j.aceite, 1) = 1)
+      order by t.data desc, ${ENTRADA} desc
+    `, [idColaborador, diaAnteriorN(agora.iso, 60), agora.legado]);
+    const pendentes: Array<{ id: number; data: string; entrada: string }> = [];
+    for (const linha of linhas.rows) {
+      // Turno da noite de ontem ainda pode fechar hoje de manhã (o app aceita a saída até o meio-dia).
+      if (linha.data === ontem && agora.hora < "12:00:00" && (await this.noturno(linha.id_carga))) continue;
+      pendentes.push({ id: linha.id, data: dataBr(linha.data), entrada: (linha.entrada ?? "").slice(0, 5) });
+    }
+    return pendentes;
+  }
+
+  /** Troca a senha do colaborador (a provisória do primeiro acesso ou a atual, quando ele quiser). */
+  async trocarSenha(idColaborador: string, senhaAtual: string, senhaNova: string) {
     const pessoa = await this.pessoa(idColaborador);
-    if (!pessoa.pin || String(pessoa.pin).trim() !== pin.trim()) throw new AppError(422, "PIN_INVALIDO", "PIN inválido.");
+    const atual = await this.db.query<{ senha: string | null; senha_hash: string | null }>("select senha, senha_hash from dna_work.candidato where id_candidato = $1", [pessoa.id_candidato]);
+    if (!atual.rows[0] || !(await senhaConfere(atual.rows[0], senhaAtual)).ok) {
+      throw new AppError(422, "SENHA_ATUAL_INVALIDA", "A senha atual não confere.", { senhaAtual: "A senha atual não confere." });
+    }
+    if (senhaNova.length < SENHA_MINIMA) throw new AppError(422, "SENHA_CURTA", "A senha precisa ter pelo menos 6 caracteres.", { senhaNova: "Use pelo menos 6 caracteres." });
+    if (senhaNova === senhaAtual) throw new AppError(422, "SENHA_IGUAL", "A senha nova precisa ser diferente da atual.", { senhaNova: "Escolha uma senha diferente da atual." });
+    await gravarSenha(this.db, pessoa.id_candidato, senhaNova, false);
+    return { ok: true };
+  }
+
+  /**
+   * Pedidos da pessoa (ajustes de batida e inclusões de marcação, os mais novos primeiro) e as batidas dos últimos
+   * 60 dias, que ela pode pedir para ajustar.
+   */
+  async solicitacoes(idColaborador: string) {
+    await this.pessoa(idColaborador);
+    const ajustes = await this.db.query<{ id: number; data: string; tipo: string; hora: string | null; texto: string | null; aceite: number | null; resposta: string | null; entrada: string | null; saida: string | null }>(`
+      select j.id, t.data, j.tipo, j.hora, j.texto, j.aceite, j.resposta, t.entrada, t.saida
+      from dna_work.justificativa j
+      join dna_work.tabela_ponto t on t.id = j.id_ponto
+      where t.id_colaborador = $1 and j.tipo in ('entrada', 'saida')
+      order by j.id desc
+      limit 60
+    `, [idColaborador]);
+    const inclusoes = await this.db.query<{ id: number; data: string; entrada: string; saida: string | null; motivo: string; aceite: number | null; resposta: string | null }>(`
+      select id, data, entrada, saida, motivo, aceite, resposta
+      from dna_work.ponto_inclusao
+      where id_colaborador = $1
+      order by id desc
+      limit 60
+    `, [idColaborador]);
+    const desde = diaAnteriorN(agoraSp().iso, 60);
+    const batidas = await this.db.query<{ id: number; data: string; entrada: string | null; saida: string | null; pend_entrada: boolean; pend_saida: boolean }>(`
+      select t.id, t.data, ${ENTRADA} as entrada, ${SAIDA} as saida,
+             exists (select 1 from dna_work.justificativa j where j.id_ponto = t.id and j.tipo = 'entrada' and j.aceite is null) as pend_entrada,
+             exists (select 1 from dna_work.justificativa j where j.id_ponto = t.id and j.tipo = 'saida' and j.aceite is null) as pend_saida
+      from dna_work.tabela_ponto t
+      where t.id_colaborador = $1 and coalesce(t.excluido, 0) = 0 and t.data >= $2
+      order by t.data desc, ${ENTRADA} desc, t.id desc
+    `, [idColaborador, desde]);
+    const situacao = (aceite: number | null) => (aceite === 1 ? "Aprovada" : aceite === 0 ? "Recusada" : "Pendente") as Solicitacao["situacao"];
+    const pedidos: Solicitacao[] = [
+      ...ajustes.rows.map((linha): Solicitacao => ({
+        chave: `ajuste-${linha.id}`,
+        origem: "ajuste",
+        dataIso: linha.data.replaceAll("/", "-"),
+        data: dataBr(linha.data),
+        titulo: `${linha.tipo === "saida" ? "Saída" : "Entrada"} às ${(linha.hora ?? "").slice(0, 5)}`,
+        detalhe: `Registrado: ${((linha.tipo === "saida" ? linha.saida : linha.entrada) || "").slice(0, 5) || "nenhum horário"}`,
+        motivo: linha.texto ?? "",
+        situacao: situacao(linha.aceite),
+        resposta: linha.resposta,
+      })),
+      ...inclusoes.rows.map((linha): Solicitacao => ({
+        chave: `inclusao-${linha.id}`,
+        origem: "inclusao",
+        dataIso: linha.data.replaceAll("/", "-"),
+        data: dataBr(linha.data),
+        titulo: `Incluir ${linha.entrada} às ${linha.saida ?? "—"}`,
+        detalhe: "Marcação esquecida",
+        motivo: linha.motivo,
+        situacao: situacao(linha.aceite),
+        resposta: linha.resposta,
+      })),
+    ].sort((a, b) => (a.situacao === "Pendente" ? 0 : 1) - (b.situacao === "Pendente" ? 0 : 1) || b.dataIso.localeCompare(a.dataIso));
+    return {
+      pedidos,
+      batidas: batidas.rows.map((linha) => ({
+        id: linha.id, data: dataBr(linha.data), entrada: linha.entrada, saida: linha.saida,
+        pendenteEntrada: linha.pend_entrada, pendenteSaida: linha.pend_saida,
+      })),
+    };
+  }
+
+  /**
+   * Pede a inclusão de um período esquecido (entrada e saída). A lei não deixa o sistema inventar marcação: ela só
+   * entra se a empresa aprovar, e fica identificada como incluída (sem horário do relógio), com o motivo, quem
+   * aprovou e quando (Portaria 671/2021, tratamento de ponto).
+   */
+  async incluir(idColaborador: string, body: { data: string; entrada: string; saida: string; motivo: string }) {
+    const pessoa = await this.pessoa(idColaborador);
+    const motivo = body.motivo.trim();
+    const hora = /^([01]\d|2[0-3]):[0-5]\d$/;
+    const campos: Record<string, string> = {};
+    const agora = agoraSp();
+    const data = /^\d{4}-\d{2}-\d{2}$/.test(body.data) ? body.data.replaceAll("-", "/") : "";
+    if (!data) campos.data = "Escolha o dia.";
+    else if (data > agora.legado) campos.data = "O dia não pode ser no futuro.";
+    else if (data < diaAnteriorN(agora.iso, 60)) campos.data = "Só dá para pedir nos últimos 60 dias. Fale com a empresa.";
+    else if (pessoa.inicio && data < pessoa.inicio) campos.data = "Esse dia é antes do início do seu contrato.";
+    if (!hora.test(body.entrada)) campos.entrada = "Informe a entrada.";
+    if (!hora.test(body.saida)) campos.saida = "Informe a saída.";
+    else if (body.saida === body.entrada) campos.saida = "A saída precisa ser diferente da entrada.";
+    if (motivo.length < 5) campos.motivo = "Conte o motivo.";
+    if (!campos.data && data === agora.legado && !campos.saida && body.saida > body.entrada && `${body.saida}:00` > agora.hora) {
+      campos.saida = "A saída não pode ser depois de agora.";
+    }
+    if (Object.keys(campos).length) throw new AppError(422, "VALIDACAO", Object.values(campos)[0], campos);
+    const client = await this.db.connect();
+    try {
+      await client.query("begin");
+      await client.query("select pg_advisory_xact_lock(hashtext($1))", [`inclusao-${idColaborador}`]);
+      await conferirSobreposicao(client, idColaborador, data, body.entrada, body.saida);
+      const novo = await client.query<{ id: number }>(
+        "insert into dna_work.ponto_inclusao (id_colaborador, data, entrada, saida, motivo) values ($1,$2,$3,$4,$5) returning id",
+        [idColaborador, data, body.entrada, body.saida, motivo.slice(0, 255)],
+      );
+      await client.query("commit");
+      return { id: novo.rows[0].id };
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Pede o ajuste de uma batida. A marcação original não muda (Portaria 671/2021): se a empresa aprovar, o horário
+   * corrigido vai para entrada_editado/saida_editado, como o sistema antigo já faz.
+   */
+  async solicitar(idColaborador: string, body: { idPonto: number; tipo: "entrada" | "saida"; hora: string; motivo: string }) {
+    await this.pessoa(idColaborador);
+    const motivo = body.motivo.trim();
+    const campos: Record<string, string> = {};
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(body.hora)) campos.hora = "Informe o horário certo.";
+    if (motivo.length < 5) campos.motivo = "Conte o motivo do ajuste.";
+    if (Object.keys(campos).length) throw new AppError(422, "VALIDACAO", Object.values(campos)[0], campos);
+    const batida = await this.db.query<{ data: string; entrada: string | null; saida: string | null }>(`
+      select data, coalesce(nullif(entrada_editado, ''), entrada) as entrada, coalesce(nullif(saida_editado, ''), saida) as saida
+      from dna_work.tabela_ponto where id = $1 and id_colaborador = $2 and coalesce(excluido, 0) = 0
+    `, [body.idPonto, idColaborador]);
+    const linha = batida.rows[0];
+    if (!linha) throw new AppError(404, "BATIDA_NAO_ENCONTRADA", "Batida não encontrada.");
+    const agora = agoraSp();
+    if (linha.data === agora.legado && `${body.hora}:00` > agora.hora) {
+      throw new AppError(422, "HORA_FUTURA", "O horário não pode ser depois de agora.", { hora: "O horário não pode ser depois de agora." });
+    }
+    const atual = (body.tipo === "entrada" ? linha.entrada : linha.saida) ?? "";
+    if (atual.slice(0, 5) === body.hora) {
+      throw new AppError(422, "SEM_MUDANCA", "Esse já é o horário registrado.", { hora: "Esse já é o horário registrado." });
+    }
+    const client = await this.db.connect();
+    try {
+      await client.query("begin");
+      await client.query("select pg_advisory_xact_lock(hashtext('justificativa'))");
+      const pendente = await client.query("select 1 from dna_work.justificativa where id_ponto = $1 and tipo = $2 and aceite is null", [body.idPonto, body.tipo]);
+      if (pendente.rowCount) throw new AppError(409, "JA_SOLICITADO", "Já existe um pedido para essa batida esperando a empresa.");
+      const id = (await client.query<{ id: number }>("select coalesce(max(id), 0) + 1 as id from dna_work.justificativa")).rows[0].id;
+      await client.query(
+        "insert into dna_work.justificativa (id, id_ponto, tipo, hora, texto) values ($1,$2,$3,$4,$5)",
+        [id, body.idPonto, body.tipo, body.hora, motivo.slice(0, 255)],
+      );
+      await client.query(`update dna_work.tabela_ponto set ${body.tipo === "entrada" ? "justificou_entrada" : "justificou_saida"} = 1 where id = $1`, [body.idPonto]);
+      await client.query("commit");
+      return { id };
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async bater(idColaborador: string, confirmar: boolean, latitude: number | null, longitude: number | null, dispositivo: string) {
+    const pessoa = await this.pessoa(idColaborador);
     const agora = agoraSp();
     const bloqueio = await this.bloqueio(idColaborador, agora.legado);
     if (bloqueio) throw new AppError(409, "PONTO_BLOQUEADO", bloqueio);
@@ -140,7 +395,8 @@ export class PontoColaboradorService {
 
   private async pessoa(idColaborador: string) {
     const result = await this.db.query<ColaboradorPonto>(`
-      select col.id_colaborador, c.id_candidato, col.id_empresa, col.pin, c.cpf,
+      select col.id_colaborador, c.id_candidato, col.id_empresa, c.cpf, c.atualiza_senha,
+             nullif(replace(left(col.data_inicio::text, 10), '-', '/'), '') as inicio,
              case when c.usanomesocial::text = '1' then coalesce(nullif(c.nomesocial, ''), c.nome) else c.nome end as nome,
              coalesce(e.nome_fantasia, e.razao_social, 'Empresa') as empresa
       from dna_work.colaborador col
@@ -171,10 +427,11 @@ export class PontoColaboradorService {
 
   private async registros(idColaborador: string): Promise<RegistroPonto[]> {
     const rows = await this.db.query<Batida>(`
-      select id, data, entrada, saida, nsf_entrada, nsf_saida, id_carga
+      select id, data, coalesce(nullif(entrada_editado, ''), entrada) as entrada, coalesce(nullif(saida_editado, ''), saida) as saida,
+             nsf_entrada, nsf_saida, id_carga
       from dna_work.tabela_ponto
       where id_colaborador = $1 and coalesce(excluido, 0) = 0
-      order by data desc, id desc
+      order by data desc, coalesce(nullif(btrim(entrada_editado), ''), entrada) desc, id desc
       limit 8
     `, [idColaborador]);
     return rows.rows.map((row) => ({
@@ -193,7 +450,7 @@ export class PontoColaboradorService {
              nsf_entrada, nsf_saida, id_carga
       from dna_work.tabela_ponto
       where id_colaborador = $1 and coalesce(excluido, 0) = 0
-      order by data desc, id desc
+      order by data desc, coalesce(nullif(btrim(entrada_editado), ''), entrada) desc, id desc
       limit 1
     `, [idColaborador]);
     const ultimo = rows.rows[0];
@@ -212,7 +469,7 @@ export class PontoColaboradorService {
       select data, coalesce(nullif(saida, ''), entrada) as hora
       from dna_work.tabela_ponto
       where id_colaborador = $1 and coalesce(excluido, 0) = 0 and coalesce(entrada, '') <> ''
-      order by data desc, id desc
+      order by data desc, coalesce(nullif(btrim(entrada_editado), ''), entrada) desc, id desc
       limit 1
     `, [idColaborador]);
     return rows.rows[0] ?? null;
@@ -308,6 +565,13 @@ function diaAnterior(iso: string) {
   const [ano, mes, dia] = iso.split("-").map(Number);
   const data = new Date(Date.UTC(ano, mes - 1, dia));
   data.setUTCDate(data.getUTCDate() - 1);
+  return data.toISOString().slice(0, 10).replaceAll("-", "/");
+}
+
+function diaAnteriorN(iso: string, dias: number) {
+  const [ano, mes, dia] = iso.split("-").map(Number);
+  const data = new Date(Date.UTC(ano, mes - 1, dia));
+  data.setUTCDate(data.getUTCDate() - dias);
   return data.toISOString().slice(0, 10).replaceAll("-", "/");
 }
 

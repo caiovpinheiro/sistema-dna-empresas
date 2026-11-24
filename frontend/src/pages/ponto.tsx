@@ -1,13 +1,16 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Janela, useCadastroNaUrl } from "../components/janela";
-import { ApagarColaborador, ConfiguracaoPonto } from "./ponto-config";
+import { ApagarColaborador, ConfiguracaoPonto, RedefinirSenha } from "./ponto-config";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Plus, Search, Trash2 } from "lucide-react";
-import { Link as RouterLink, useNavigate } from "react-router-dom";
+import { Link as RouterLink, useNavigate, useSearchParams } from "react-router-dom";
+import { Saldo, horasMin } from "./relatorio-ponto";
 import { ApiError, api } from "../lib/api";
 import { dataBr } from "../lib/formato";
 import { Alerta, Badge, Button, CabecalhoPagina, Card, Empty, Field, Input, Resumo, Select, Skeleton, botao, cn } from "../components/ui";
 import { CampoBusca, Consulta, TabelaLinhas } from "./consultas";
+import { nomeModalidade, useJornadas } from "./jornadas";
+import { filtrar } from "../lib/busca";
 
 type Linha = Record<string, string | number | null>;
 
@@ -67,8 +70,8 @@ export function Listagem({ titulo, descricao, caminho, novo, rotuloNovo = "Cadas
   const lista = useQuery({ queryKey: [caminho], queryFn: () => api<Linha[]>(caminho) });
   const [texto, setTexto] = useState("");
   const todas = Array.isArray(lista.data?.data) ? lista.data.data : [];
-  const termo = texto.trim().toLowerCase();
-  const linhas = termo ? todas.filter((linha) => colunas.some((coluna) => String(linha[coluna.chave] ?? "").toLowerCase().includes(termo))) : todas;
+  const termo = texto.trim();
+  const linhas = filtrar(todas, termo, colunas.map((coluna) => coluna.chave));
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-5">
       <CabecalhoPagina
@@ -83,7 +86,7 @@ export function Listagem({ titulo, descricao, caminho, novo, rotuloNovo = "Cadas
           {cadastro.formulario(fecharJanela)}
         </Janela>
       ) : null}
-      {todas.length > 5 ? <Card><CampoBusca valor={texto} onChange={setTexto} placeholder="Filtrar nesta lista" /></Card> : null}
+      {todas.length > 5 ? <Card><CampoBusca valor={texto} onChange={setTexto} placeholder="Buscar nesta lista (sem precisar de acento)" /></Card> : null}
       {!lista.isError ? <Resumo total={linhas.length} singular={singular} plural={plural} carregando={lista.isLoading} /> : null}
       {lista.isError ? <Alerta>{lista.error instanceof ApiError ? lista.error.message : "Não foi possível carregar esta lista."}</Alerta> : null}
       {lista.isLoading ? <Skeleton className="h-56" /> : null}
@@ -107,47 +110,36 @@ export function Listagem({ titulo, descricao, caminho, novo, rotuloNovo = "Cadas
   );
 }
 
-/** Com `reativar`, abre preenchido com os dados da pessoa desligada e cria uma passagem nova (começa do zero). */
-export function ColaboradorNovo({ aoFechar, iniciais, reativar = false }: { aoFechar?: () => void; iniciais?: Record<string, string>; reativar?: boolean } = {}) {
-  return <Formulario aoFechar={aoFechar} iniciais={iniciais} extra={reativar ? { reativar: "1" } : {}} titulo="Cadastrar colaborador" destino="/api/v1/empresa/colaboradores" voltar="/colaboradores" campos={[
-    ["nome", "Nome", "text"], ["cpf", "CPF", "text"], ["email", "E-mail", "email"], ["celular", "Celular", "text"],
-    ["cargo", "Cargo", "text"], ["departamento", "Departamento", "text"],
-    ["modalidade", "Modalidade", "select", [{ valor: "2", rotulo: "CLT" }, { valor: "1", rotulo: "Estágio" }]],
-    ["inicio", "Início", "date"],
-  ]} />;
-}
-
 /**
- * Escala = quais dias da semana a pessoa trabalha (dna_work.ponto_turno_base guarda 1 trabalha / 0 folga por dia).
- * O horário de cada dia vem da carga horária, ligada ao colaborador.
+ * Cadastro de colaborador. A jornada (dias e horários de trabalho) entra junto: sem ela o ponto trata todo dia como folga.
+ * Com `reativar`, abre preenchido com os dados da pessoa desligada e cria uma passagem nova (começa do zero).
  */
-const TRABALHA_FOLGA = [{ valor: "1", rotulo: "Trabalha" }, { valor: "0", rotulo: "Folga" }];
-const DIAS_ESCALA: Array<[string, string]> = [
-  ["segunda", "Segunda"], ["terca", "Terça"], ["quarta", "Quarta"], ["quinta", "Quinta"], ["sexta", "Sexta"], ["sabado", "Sábado"], ["domingo", "Domingo"],
-];
-
-export function EscalaNova({ aoFechar }: { aoFechar?: () => void } = {}) {
-  return <Formulario aoFechar={aoFechar}
-    titulo="Cadastrar escala"
-    descricao="Marque os dias em que a pessoa trabalha. O horário de cada dia vem da carga horária."
-    destino="/api/v1/empresa/escalas"
-    voltar="/escalas"
-    iniciais={{ segunda: "1", terca: "1", quarta: "1", quinta: "1", sexta: "1", sabado: "0", domingo: "0" }}
-    semSelecione={DIAS_ESCALA.map(([chave]) => chave)}
-    campos={[["nome", "Nome", "text"], ...DIAS_ESCALA.map(([chave, rotulo]) => [chave, rotulo, "select", TRABALHA_FOLGA] as [string, string, string, typeof TRABALHA_FOLGA])]}
-  />;
-}
-
-export function CargaNova({ aoFechar }: { aoFechar?: () => void } = {}) {
-  return <Formulario aoFechar={aoFechar} titulo="Cadastrar carga horária" destino="/api/v1/empresa/cargas" voltar="/cargas" campos={[
-    // Diurno ou noturno não é escolhido aqui: o servidor calcula pelo horário (passa da meia-noite ou maior parte entre 22h e 5h).
-    ["nome", "Nome", "text"],
-    ["entrada", "Entrada", "time"], ["pausa", "Pausa para refeição", "select", [{ valor: "1", rotulo: "Sim" }, { valor: "0", rotulo: "Não" }]],
-    // Com "Não", os horários de refeição somem; com "Sim" ou nada escolhido, aparecem.
-    ["saidaRefeicao", "Saída refeição", "time", undefined, (valores) => valores.pausa !== "0"],
-    ["retornoRefeicao", "Retorno refeição", "time", undefined, (valores) => valores.pausa !== "0"],
-    ["saida", "Saída", "time"], ["tolerancia", "Tolerância (min)", "text"],
-  ]} />;
+export function ColaboradorNovo({ aoFechar, iniciais, reativar = false }: { aoFechar?: () => void; iniciais?: Record<string, string>; reativar?: boolean } = {}) {
+  const jornadas = useJornadas();
+  // A modalidade (estágio ou CLT) vem da jornada escolhida. Só entram jornadas completas: horário em todos os dias de
+  // trabalho e modalidade definida (as escalas antigas precisam ser completadas antes).
+  const completas = (jornadas.data?.data ?? []).filter((jornada) => jornada.completa && jornada.modalidade);
+  const opcoes = completas.map((jornada) => ({ valor: String(jornada.id), rotulo: `${jornada.nome} (${nomeModalidade(jornada.modalidade)}) · ${jornada.resumo}` }));
+  const semJornada = !jornadas.isLoading && !completas.length;
+  return <Formulario aoFechar={aoFechar} iniciais={iniciais} extra={reativar ? { reativar: "1" } : {}} titulo="Cadastrar colaborador" destino="/api/v1/empresa/colaboradores" voltar="/colaboradores"
+    aviso={semJornada ? (
+      <Alerta tom="aviso">
+        A empresa ainda não tem jornada de trabalho. <RouterLink className="font-bold underline" to="/jornadas?novo=1" onClick={aoFechar}>Cadastre uma jornada</RouterLink> com os dias e horários e volte aqui.
+      </Alerta>
+    ) : null}
+    ajudas={{
+      cargo: "A função da pessoa. Aparece na lista e no espelho de ponto.",
+      departamento: "Opcional. O setor, para encontrar e agrupar as pessoas.",
+      jornada: "Dias e horários de trabalho. A modalidade (estágio ou CLT) vem da jornada. Crie e altere em Jornadas de trabalho.",
+      senha: "Senha provisória para o app do ponto (mínimo 6 caracteres). A pessoa entra com o CPF e essa senha e cria a dela no primeiro acesso.",
+    }}
+    campos={[
+      ["nome", "Nome", "text"], ["cpf", "CPF", "text"], ["email", "E-mail", "email"], ["celular", "Celular", "text"],
+      ["cargo", "Cargo", "text"], ["departamento", "Departamento", "text"],
+      ["inicio", "Início", "date"],
+      ["jornada", "Jornada de trabalho", "select", opcoes],
+      ["senha", "Senha do primeiro acesso", "password"],
+    ]} />;
 }
 
 export function FeriadoNovo({ aoFechar }: { aoFechar?: () => void } = {}) {
@@ -172,16 +164,14 @@ export function FeriadoNovo({ aoFechar }: { aoFechar?: () => void } = {}) {
   />;
 }
 
-export function RelatorioPonto() {
-  return <Listagem titulo="Cartão ponto" descricao="Últimas batidas dos colaboradores. Clique no nome para ver o relatório completo da pessoa." singular="batida" plural="batidas" caminho="/api/v1/empresa/ponto/relatorio" linkNome={(linha) => linha.id_candidato ? `/ponto/colaborador/${linha.id_candidato}` : null} colunas={[
-    { chave: "nome", titulo: "Colaborador" }, { chave: "data", titulo: "Data" }, { chave: "entrada", titulo: "Entrada" }, { chave: "saida", titulo: "Saída" }, { chave: "horas", titulo: "Horas" },
-  ]} />;
-}
+export { RelatorioPonto } from "./relatorio-ponto";
 
-type DiaPonto = { data: string; dia: string; anterior?: boolean; situacao: string; entrada1: string; saida1: string; entrada2: string; saida2: string; total: string; carga: string; saldo: string; saldoNegativo: boolean; banco: string; bancoNegativo: boolean };
+type ResumoPeriodo = { feitos: number; previstos: number; saldo: number; diasTrabalhados: number; faltas: number; incompletas: number; atestados: number };
+type DiaPonto = { data: string; dia: string; anterior?: boolean; incompleta?: boolean; ajustado?: boolean; situacao: string; entrada1: string; saida1: string; entrada2: string; saida2: string; total: string; carga: string; saldo: string; saldoNegativo: boolean; banco: string; bancoNegativo: boolean };
 type RelatorioPessoa = {
   nome: string; cargo: string; bancoHoras: boolean; semRegistro?: boolean; estagio?: boolean; desligado?: boolean;
   inicioContrato?: string; temAnterior?: boolean; cadastro?: Record<string, string>;
+  periodo?: ResumoPeriodo; periodoAnterior?: ResumoPeriodo | null; total?: ResumoPeriodo | null;
   de?: string; ate?: string; dias: DiaPonto[];
 };
 
@@ -209,9 +199,11 @@ export function ColaboradoresPonto() {
 }
 
 export function RelatorioPontoColaborador({ id }: { id: string }) {
-  const [de, setDe] = useState("");
-  const [ate, setAte] = useState("");
-  const [periodo, setPeriodo] = useState<{ de?: string; ate?: string }>({});
+  // Vindo do relatório do período, abre já com as mesmas datas (?de=&ate=).
+  const [parametros] = useSearchParams();
+  const [de, setDe] = useState(parametros.get("de") ?? "");
+  const [ate, setAte] = useState(parametros.get("ate") ?? "");
+  const [periodo, setPeriodo] = useState<{ de?: string; ate?: string }>(parametros.get("de") ? { de: parametros.get("de")!, ate: parametros.get("ate") ?? undefined } : {});
   const [reativando, setReativando] = useState(false);
   const relatorio = useQuery({
     queryKey: ["ponto-colaborador", id, periodo.de ?? "", periodo.ate ?? ""],
@@ -220,6 +212,8 @@ export function RelatorioPontoColaborador({ id }: { id: string }) {
   const pessoa = relatorio.data?.data;
   const dias = pessoa?.dias ?? [];
   const temDiaAnterior = dias.some((dia) => dia.anterior);
+  // Banco de horas gravado pelo sistema antigo: a coluna só aparece quando há valor.
+  const temBanco = dias.some((dia) => dia.banco);
   useEffect(() => {
     if (!periodo.de && pessoa?.de) setDe(pessoa.de);
     if (!periodo.ate && pessoa?.ate) setAte(pessoa.ate);
@@ -228,7 +222,10 @@ export function RelatorioPontoColaborador({ id }: { id: string }) {
     <div className="grid grid-cols-[minmax(0,1fr)] gap-5">
       <RouterLink to="/ponto/colaboradores" className="inline-flex w-fit items-center gap-1 text-sm font-semibold text-slate-500 hover:text-ink"><ArrowLeft size={16} /> Colaboradores</RouterLink>
       <CabecalhoPagina titulo={pessoa?.nome || "Relatório de ponto"} descricao={[pessoa?.cargo, pessoa?.bancoHoras ? "Com banco de horas" : null].filter(Boolean).join(" · ") || "Batidas, saldo do dia e banco de horas."} acoes={pessoa && !pessoa.semRegistro ? (
-        <ApagarColaborador id={id} nome={pessoa.nome || "o colaborador"} desligado={Boolean(pessoa.desligado)} aoReativar={() => setReativando(true)} />
+        <div className="flex flex-wrap justify-end gap-2">
+          {pessoa.desligado ? null : <RedefinirSenha id={id} nome={pessoa.nome || "o colaborador"} />}
+          <ApagarColaborador id={id} nome={pessoa.nome || "o colaborador"} desligado={Boolean(pessoa.desligado)} aoReativar={() => setReativando(true)} />
+        </div>
       ) : null} />
       {pessoa && !pessoa.semRegistro ? <ConfiguracaoPonto id={id} estagio={Boolean(pessoa.estagio)} desligado={Boolean(pessoa.desligado)} /> : null}
       <Janela titulo={`Reativar ${pessoa?.nome ?? ""}`} descricao="A pessoa volta como se fosse nova: sem saldo nem banco de horas. Confira a modalidade e o início." aberta={reativando} onFechar={() => setReativando(false)}>
@@ -246,6 +243,38 @@ export function RelatorioPontoColaborador({ id }: { id: string }) {
           <Button type="submit" className="h-10"><Search size={16} /> Pesquisar</Button>
         </form>
       </Card>
+      {pessoa && !pessoa.semRegistro && pessoa.periodo ? (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Card>
+            <p className="text-xs font-semibold text-slate-500">Trabalhado no período</p>
+            <p className="text-xl font-extrabold tabular-nums text-ink">{horasMin(pessoa.periodo.feitos)}</p>
+            <p className="text-xs text-slate-500">de {horasMin(pessoa.periodo.previstos)} previstas</p>
+          </Card>
+          <Card>
+            <p className="text-xs font-semibold text-slate-500">Saldo do período</p>
+            <p className="text-xl"><Saldo minutos={pessoa.periodo.saldo} /></p>
+            <p className="text-xs text-slate-500">{pessoa.de && pessoa.ate ? `${dataBr(pessoa.de)} a ${dataBr(pessoa.ate)}` : "Período escolhido"}</p>
+          </Card>
+          <Card>
+            <p className="text-xs font-semibold text-slate-500">Saldo total</p>
+            <p className="text-xl"><Saldo minutos={pessoa.total?.saldo} /></p>
+            <p className="text-xs text-slate-500">{pessoa.inicioContrato ? `Desde ${dataBr(pessoa.inicioContrato)}, início do contrato` : "Desde o início do contrato"}</p>
+          </Card>
+          <Card>
+            <p className="text-xs font-semibold text-slate-500">No período</p>
+            <p className="text-sm text-ink">
+              {pessoa.periodo.diasTrabalhados} {pessoa.periodo.diasTrabalhados === 1 ? "dia trabalhado" : "dias trabalhados"}
+              {pessoa.periodo.faltas ? ` · ${pessoa.periodo.faltas} ${pessoa.periodo.faltas === 1 ? "falta" : "faltas"}` : ""}
+              {pessoa.periodo.atestados ? ` · ${pessoa.periodo.atestados} ${pessoa.periodo.atestados === 1 ? "atestado" : "atestados"}` : ""}
+            </p>
+            {pessoa.periodo.incompletas ? <p className="text-xs font-semibold text-amber-700">{pessoa.periodo.incompletas} {pessoa.periodo.incompletas === 1 ? "batida incompleta" : "batidas incompletas"}: falta a saída</p> : null}
+            {pessoa.estagio && pessoa.periodo.saldo > 0 ? <p className="text-xs font-semibold text-amber-700">Estágio acima da jornada: a Lei do Estágio não permite hora extra.</p> : null}
+          </Card>
+        </div>
+      ) : null}
+      {pessoa?.periodoAnterior ? (
+        <p className="text-sm text-slate-500">Contratação anterior, no mesmo período: {horasMin(pessoa.periodoAnterior.feitos)} trabalhadas, saldo <Saldo minutos={pessoa.periodoAnterior.saldo} /> (não entra no saldo atual).</p>
+      ) : null}
       {relatorio.isLoading ? <Skeleton className="h-72" /> : null}
       {relatorio.isError ? <Alerta>{relatorio.error instanceof ApiError ? relatorio.error.message : "Não foi possível carregar o relatório."}</Alerta> : null}
       {pessoa?.semRegistro ? <Empty titulo="Sem cadastro de ponto" texto="Esta pessoa ainda não tem cadastro de ponto nesta empresa." /> : null}
@@ -255,7 +284,7 @@ export function RelatorioPontoColaborador({ id }: { id: string }) {
             <table className="data-table min-w-[860px]">
               <thead>
                 <tr>
-                  {["Data", "Dia", "Ent. 1", "Saí. 1", "Ent. 2", "Saí. 2", "Total", "Carga", "Saldo", "B. Horas"].map((titulo) => <th key={titulo}>{titulo}</th>)}
+                  {["Data", "Dia", "Ent. 1", "Saí. 1", "Ent. 2", "Saí. 2", "Total", "Carga", "Saldo", ...(temBanco ? ["B. Horas"] : [])].map((titulo) => <th key={titulo}>{titulo}</th>)}
                 </tr>
               </thead>
               <tbody>
@@ -264,16 +293,19 @@ export function RelatorioPontoColaborador({ id }: { id: string }) {
                     <td className="whitespace-nowrap tabular-nums">
                       {dataBr(dia.data)}
                       {dia.anterior ? <span className="ml-2 align-middle"><Badge value="Desligado">Contrato anterior</Badge></span> : null}
+                      {dia.ajustado ? <span className="ml-2 align-middle" title="Horário corrigido ou incluído por pedido aprovado. A marcação original do relógio continua guardada."><Badge value="pendente">Ajustado</Badge></span> : null}
                     </td>
                     <td className="text-slate-500">{dia.dia}</td>
                     <td className={cn("tabular-nums", dia.situacao ? "font-semibold text-amber-700" : "")}>{dia.situacao || dia.entrada1 || "—"}</td>
-                    <td className="tabular-nums">{dia.saida1 || "—"}</td>
+                    <td className="tabular-nums">{dia.saida1 || (dia.incompleta && dia.entrada1 ? <span className="font-semibold text-amber-700">Sem saída</span> : "—")}</td>
                     <td className="tabular-nums">{dia.entrada2 || "—"}</td>
-                    <td className="tabular-nums">{dia.saida2 || "—"}</td>
+                    <td className="tabular-nums">{dia.saida2 || (dia.incompleta && dia.entrada2 ? <span className="font-semibold text-amber-700">Sem saída</span> : "—")}</td>
                     <td className="font-semibold tabular-nums">{dia.total}</td>
                     <td className="tabular-nums text-slate-500">{dia.carga}</td>
-                    <td className={cn("font-semibold tabular-nums", dia.saldoNegativo ? "text-rose-700" : "text-emerald-700")}>{dia.saldo}</td>
-                    <td className={cn("tabular-nums", dia.bancoNegativo ? "text-rose-700" : "")}>{dia.banco || "—"}</td>
+                    <td className={cn("font-semibold tabular-nums", dia.saldoNegativo ? "text-rose-700" : dia.saldo !== "00:00:00" ? "text-emerald-700" : "text-slate-500")}>
+                      {dia.saldoNegativo ? "-" : dia.saldo !== "00:00:00" ? "+" : ""}{dia.saldo}
+                    </td>
+                    {temBanco ? <td className={cn("tabular-nums", dia.bancoNegativo ? "text-rose-700" : "")}>{dia.banco || "—"}</td> : null}
                   </tr>
                 ))}
               </tbody>
@@ -288,9 +320,15 @@ export function RelatorioPontoColaborador({ id }: { id: string }) {
 }
 
 /** [chave, rótulo, tipo, opções do select, quando mostrar o campo (a partir dos valores atuais)]. */
-type CampoFormulario = [string, string, string, Array<{ valor: string; rotulo: string }>?, ((valores: Record<string, string>) => boolean)?];
+type OpcaoCampo = { valor: string; rotulo: string };
+/** Opções do select: fixas ou calculadas a partir dos outros campos (ex.: jornadas da modalidade escolhida). */
+type CampoFormulario = [string, string, string, (OpcaoCampo[] | ((valores: Record<string, string>) => OpcaoCampo[]))?, ((valores: Record<string, string>) => boolean)?];
 
-export function Formulario({ titulo, descricao, destino, voltar, campos, extra = {}, iniciais = {}, semSelecione = [], aoFechar }: {
+export function Formulario({ titulo, descricao, destino, voltar, campos, extra = {}, iniciais = {}, semSelecione = [], aoFechar, ajudas = {}, aviso }: {
+  /** Texto curto embaixo do campo explicando para que ele serve. */
+  ajudas?: Record<string, string>;
+  /** Aviso no topo do formulário (ex.: falta cadastrar algo antes). */
+  aviso?: ReactNode;
   titulo: string;
   descricao?: string;
   destino: string;
@@ -330,7 +368,7 @@ export function Formulario({ titulo, descricao, destino, voltar, campos, extra =
       setCamposErro(error instanceof ApiError && error.campos ? error.campos : {});
     },
   });
-  const obrigatorio = (chave: string, tipo: string) => (tipo !== "time" && tipo !== "select" && !["email", "celular", "departamento", "salario", "cidade", "tolerancia"].includes(chave)) || chave === "modalidade";
+  const obrigatorio = (chave: string, tipo: string) => (tipo !== "time" && tipo !== "select" && !["email", "celular", "departamento", "salario", "cidade", "tolerancia"].includes(chave)) || chave === "modalidade" || chave === "jornada";
   const cancelar = () => (aoFechar ? aoFechar() : navigate(voltar));
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-5">
@@ -342,17 +380,19 @@ export function Formulario({ titulo, descricao, destino, voltar, campos, extra =
       )}
       <form className="grid max-w-3xl gap-5" onSubmit={(event) => { event.preventDefault(); setErro(""); salvar.mutate(extra.reativar === "1"); }}>
         <Card className="grid gap-4 md:p-5">
+          {aviso}
           <div className="grid gap-3 sm:grid-cols-2">
             {campos.filter(([, , , , mostrar]) => !mostrar || mostrar(valores)).map(([chave, rotulo, tipo, opcoes]) => (
-              <Field key={chave} label={rotulo} dica={obrigatorio(chave, tipo) ? "obrigatório" : undefined} erro={camposErro[chave]}>
+              <Field key={chave} label={rotulo} className={chave === "jornada" ? "sm:col-span-2" : ""} dica={obrigatorio(chave, tipo) ? "obrigatório" : undefined} erro={camposErro[chave]}>
                 {tipo === "select" ? (
                   <Select aria-label={rotulo} required={obrigatorio(chave, tipo)} value={valores[chave] ?? ""} onChange={(event) => setValores({ ...valores, [chave]: event.target.value })}>
                     {semSelecione.includes(chave) ? null : <option value="">Selecione</option>}
-                    {(opcoes ?? []).map((opcao) => <option key={opcao.valor} value={opcao.valor}>{opcao.rotulo}</option>)}
+                    {(typeof opcoes === "function" ? opcoes(valores) : opcoes ?? []).map((opcao) => <option key={opcao.valor} value={opcao.valor}>{opcao.rotulo}</option>)}
                   </Select>
                 ) : (
-                  <Input aria-label={rotulo} required={obrigatorio(chave, tipo)} type={tipo} value={valores[chave] ?? ""} onChange={(event) => { if (chave === "cpf") setReativar(false); setValores({ ...valores, [chave]: event.target.value }); }} />
+                  <Input aria-label={rotulo} required={obrigatorio(chave, tipo)} type={tipo} autoComplete={tipo === "password" ? "new-password" : undefined} minLength={tipo === "password" ? 6 : undefined} value={valores[chave] ?? ""} onChange={(event) => { if (chave === "cpf") setReativar(false); setValores({ ...valores, [chave]: event.target.value }); }} />
                 )}
+                {ajudas[chave] ? <span className="text-xs text-slate-500">{ajudas[chave]}</span> : null}
               </Field>
             ))}
           </div>

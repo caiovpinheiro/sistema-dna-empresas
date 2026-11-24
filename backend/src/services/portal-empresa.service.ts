@@ -44,7 +44,7 @@ export class PortalEmpresaService {
     const usuarios = await this.buscarPorEmail(email);
     for (const usuario of usuarios) {
       if (await this.senhaConfere(usuario, password)) {
-        if (!(await this.argonConfere(usuario.senha_hash, password))) {
+        if (!(await this.argonConfere(usuario.senha_hash, password)) || usuario.senha_u) {
           await this.guardarHash(usuario.id_u, password);
         }
         const sessao = await this.montarSessao(usuario, null);
@@ -87,13 +87,12 @@ export class PortalEmpresaService {
       }
     }
     const senhaHash = await hash(password);
-    const senhaLegada = createHash("md5").update(password).digest("hex");
     try {
       await this.db.query(
         `update dna_work.usuario_empresa
-         set senha_hash = $2, senha_u = $3, atualiza_senha = 0, data_senha = to_char(current_date, 'YYYY/MM/DD')
+         set senha_hash = $2, senha_u = null, atualiza_senha = 0, data_senha = to_char(current_date, 'YYYY/MM/DD')
          where id_u = $1`,
-        [usuarioId, senhaHash, senhaLegada],
+        [usuarioId, senhaHash],
       );
     } catch (error) {
       if (codigoPg(error) === "42703") {
@@ -334,7 +333,8 @@ export class PortalEmpresaService {
   private async guardarHash(usuarioId: string, password: string): Promise<void> {
     try {
       await this.db.query(
-        `update dna_work.usuario_empresa set senha_hash = $2 where id_u = $1`,
+        // Entrou pelo MD5 antigo: passa para o Argon2id e apaga o MD5.
+        `update dna_work.usuario_empresa set senha_hash = $2, senha_u = null where id_u = $1`,
         [usuarioId, await hash(password)],
       );
     } catch (error) {

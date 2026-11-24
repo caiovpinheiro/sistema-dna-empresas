@@ -128,6 +128,8 @@ const badgeStyles: Record<string, string> = {
   desligado: "bg-slate-100 text-slate-600",
   "fora do ponto": "bg-amber-50 text-amber-800",
   vencida: "bg-rose-50 text-rose-700",
+  aprovada: "bg-emerald-50 text-emerald-800",
+  recusada: "bg-rose-50 text-rose-700",
   estagio: "bg-violet-50 text-violet-800",
   clt: "bg-sky-50 text-sky-800",
 };

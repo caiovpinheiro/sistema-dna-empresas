@@ -10,6 +10,35 @@ try {
   // Feriado que repete todo ano (fixo) e ponto facultativo, que não conta como feriado no cálculo do ponto.
   await db.query("alter table dna_work.feriados add column if not exists fixo smallint not null default 0");
   await db.query("alter table dna_work.feriados add column if not exists facultativo smallint not null default 0");
+  // Jornada = escala com o horário de cada dia: a carga (ponto_carga_base) de cada dia de trabalho fica na própria escala.
+  for (const dia of ["segunda", "terca", "quarta", "quinta", "sexta", "sabado", "domingo"]) {
+    await db.query(`alter table dna_work.ponto_turno_base add column if not exists ${dia}_carga integer`);
+  }
+  // Modalidade da jornada (1 estágio, 2 CLT): define os limites da lei e quem pode usá-la. Escalas antigas ficam sem.
+  await db.query("alter table dna_work.ponto_turno_base add column if not exists modalidade smallint");
+  // Último dia de trabalho de quem foi desligado ("YYYY/MM/DD", como as outras datas do legado): depois dele não há falta.
+  await db.query("alter table dna_work.colaborador add column if not exists data_desligamento character varying");
+  // Senha do app do ponto em Argon2id (com salt), como a do portal da empresa.
+  await db.query("alter table dna_work.candidato add column if not exists senha_hash character varying");
+  // Pedido do colaborador para incluir uma marcação que ele esqueceu (entrada, saída ou o dia inteiro). Aprovado, vira
+  // uma linha em tabela_ponto só com os campos *_editado: fica identificada como incluída, sem horário do relógio.
+  await db.query(`
+    create table if not exists dna_work.ponto_inclusao (
+      id serial primary key,
+      id_colaborador character varying not null,
+      data character varying(10) not null,
+      entrada character varying(5) not null,
+      saida character varying(5),
+      motivo character varying(255) not null,
+      aceite smallint,
+      resposta character varying(255),
+      id_ponto integer,
+      id_usuario character varying,
+      criado_em timestamptz not null default now(),
+      respondido_em timestamptz
+    )
+  `);
+  await db.query("create index if not exists ponto_inclusao_colaborador on dna_work.ponto_inclusao (id_colaborador)");
   await db.query(`
     create table if not exists dna_work.cadastro_empresa_aceite (
       id uuid primary key,

@@ -6,6 +6,7 @@ import { ApiError, api } from "../lib/api";
 import { dataBr, dinheiro, haQuantoTempo } from "../lib/formato";
 import { Alerta, Badge, Bloco, Button, CabecalhoPagina, Card, Empty, Field, FiltroChips, Input, Select, Skeleton, Textarea, botao, chave, cn } from "../components/ui";
 import { CampoBusca, type VagaLinha } from "./consultas";
+import { combina } from "../lib/busca";
 
 type Situacao = "aberta" | "pausada" | "contratada" | "fechada" | "todas";
 export type TipoVaga = "1" | "2";
@@ -60,9 +61,10 @@ export function VagasPage({ tipos }: { tipos: TipoVaga[] }) {
   const lista = useQuery({ queryKey: ["/api/v1/empresa/vagas", ""], queryFn: () => api<VagaLinha[]>("/api/v1/empresa/vagas?q=") });
   const todas = lista.data?.data ?? [];
   const contagem = (id: Situacao) => (id === "todas" ? todas.length : todas.filter((vaga) => chave(vaga.situacao) === id).length);
-  const termo = texto.trim().toLowerCase();
+  const termo = texto.trim();
+  // Busca inteligente: sem acento, várias palavras em qualquer ordem, em cargo, cidade, código, contrato e período.
   const linhas = todas.filter((vaga) => (situacao === "todas" || chave(vaga.situacao) === situacao)
-    && (!termo || [vaga.cargo, vaga.cidade, vaga.codigo, vaga.contrato].some((campo) => (campo ?? "").toLowerCase().includes(termo))));
+    && combina([vaga.cargo, vaga.cidade, vaga.codigo, vaga.contrato, vaga.periodo, vaga.salario, vaga.dataabertura], termo));
   const abrir = linkAbrirVaga(tipos);
   const opcoes = (["aberta", "pausada", "contratada", "fechada", "todas"] as Situacao[])
     .map((id) => ({ id, rotulo: { aberta: "Em aberto", pausada: "Pausadas", contratada: "Contratadas", fechada: "Encerradas", todas: "Todas" }[id], contagem: lista.isLoading ? undefined : contagem(id) }))

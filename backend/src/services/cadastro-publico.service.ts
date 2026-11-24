@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomInt } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import { hash } from "@node-rs/argon2";
 import type { Pool } from "pg";
 import { AppError } from "../lib/errors.js";
@@ -143,7 +143,6 @@ export class CadastroPublicoService {
     const comparador = randomBytes(8).toString("hex");
     const senha = senhaInicial();
     const senhaHash = await hash(senha);
-    const senhaLegada = createHash("md5").update(senha).digest("hex");
     const hoje = new Date().toISOString().slice(0, 10).replaceAll("-", "/");
     const comprovante = `DNA-${randomBytes(5).toString("hex").toUpperCase()}`;
     const condicoes = condicoesDaModalidade(dados.vaga.modalidade);
@@ -272,7 +271,8 @@ export class CadastroPublicoService {
         usuarioId,
         dados.empresa.nome,
         dados.empresa.email,
-        senhaLegada,
+        // MD5 antigo (senha_u) não é mais gravado: só o Argon2id.
+        null,
         senhaHash,
         somenteDigitos(dados.empresa.telefoneResponsavel).slice(0, 11),
         empresaId,

@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import type { Pool } from "pg";
 import { AppError } from "../lib/errors.js";
 import { postServico } from "../lib/servico.js";
+import { SENHA_MINIMA, gravarSenha } from "../lib/senha-colaborador.js";
+import { conferirSobreposicao } from "./ponto-colaborador.service.js";
 import { SEDE_DNA, USA_ASAAS, gravarValoresPadraoDaVaga, semAcento } from "../lib/empresa-interno.js";
 import { ABRANGENCIAS, dataNoAno, feriadosNacionais, isoDe, type Abrangencia } from "../lib/feriados.js";
 
@@ -21,6 +23,141 @@ function tipoDaJornada(entrada: string, saida: string): "Diurno" | "Noturno" {
     if (doDia >= 22 * 60 || doDia < 5 * 60) noturnos += 1;
   }
   return noturnos * 2 > fim - inicio ? "Noturno" : "Diurno";
+}
+
+/** Dias da semana: chave do formulário/carga_horaria, coluna 1/0 em ponto_turno_base e rótulo curto. */
+const DIAS_SEMANA = [
+  { chave: "segunda", coluna: "segunda_feira", rotulo: "Seg" },
+  { chave: "terca", coluna: "terca_feira", rotulo: "Ter" },
+  { chave: "quarta", coluna: "quarta_feira", rotulo: "Qua" },
+  { chave: "quinta", coluna: "quinta_feira", rotulo: "Qui" },
+  { chave: "sexta", coluna: "sexta_feira", rotulo: "Sex" },
+  { chave: "sabado", coluna: "sabado", rotulo: "Sáb" },
+  { chave: "domingo", coluna: "domingo", rotulo: "Dom" },
+] as const;
+
+type CargaBase = {
+  id: number; entrada: string | null; saida_refeicao: string | null; retorno_refeicao: string | null; saida: string | null;
+  tolerancia: string | null; pausa: number | null;
+};
+
+/** Horário de um dia a partir da carga. Sem pausa, o sistema antigo grava a refeição igual à saída. */
+function horarioDaCarga(carga: CargaBase) {
+  const hhmm = (valor: string | null) => (valor ?? "").slice(0, 5);
+  const pausa = Number(carga.pausa) === 1 && hhmm(carga.saida_refeicao) !== hhmm(carga.saida);
+  return {
+    entrada: hhmm(carga.entrada),
+    saida: hhmm(carga.saida),
+    pausa,
+    saidaRefeicao: pausa ? hhmm(carga.saida_refeicao) : "",
+    retornoRefeicao: pausa ? hhmm(carga.retorno_refeicao) : "",
+    tolerancia: (carga.tolerancia ?? "").trim() || "0",
+  };
+}
+
+/** Minutos entre dois horários "HH:MM" (passa da meia-noite quando o fim é menor). */
+function minutosEntre(inicio: string, fim: string) {
+  const minutos = (hora: string) => Number(hora.slice(0, 2)) * 60 + Number(hora.slice(3, 5));
+  const total = minutos(fim) - minutos(inicio);
+  return total < 0 ? total + 24 * 60 : total;
+}
+
+/**
+ * Regras da lei para a jornada. Erro impede salvar; aviso só alerta (vale com acordo ou convenção coletiva).
+ * - Estágio (Lei 11.788/2008, art. 10): até 6h por dia e 30h por semana.
+ * - CLT: até 44h por semana (CF, art. 7º, XIII); dia acima de 8h só com acordo de compensação e nunca acima de 10h
+ *   (art. 59); mais de 6h exige intervalo de 1h, que convenção coletiva pode reduzir até 30 min (arts. 71 e 611-A, III);
+ *   entre 4h e 6h, 15 min de intervalo (art. 71, §1º); um dia de descanso na semana (art. 67).
+ */
+function regrasDaJornada(
+  modalidade: "1" | "2",
+  dias: Array<{ rotulo: string; trabalha: boolean; entrada: string; saida: string; pausa: boolean; saidaRefeicao: string; retornoRefeicao: string }>,
+) {
+  const erros: string[] = [];
+  const avisos: string[] = [];
+  let semana = 0;
+  for (const dia of dias.filter((item) => item.trabalha)) {
+    const intervalo = dia.pausa ? minutosEntre(dia.saidaRefeicao, dia.retornoRefeicao) : 0;
+    const trabalhado = minutosEntre(dia.entrada, dia.saida) - intervalo;
+    semana += trabalhado;
+    const horas = `${Math.floor(trabalhado / 60)}h${trabalhado % 60 ? String(trabalhado % 60).padStart(2, "0") : ""}`;
+    if (modalidade === "1") {
+      if (trabalhado > 360) erros.push(`${dia.rotulo}: ${horas} de trabalho. Estágio pode ter no máximo 6 horas por dia (Lei 11.788/2008, art. 10).`);
+      continue;
+    }
+    if (trabalhado > 600) erros.push(`${dia.rotulo}: ${horas} de trabalho. Pela CLT o dia não pode passar de 10 horas (art. 59).`);
+    else if (trabalhado > 480) avisos.push(`${dia.rotulo}: ${horas} de trabalho. Mais de 8 horas no dia só vale com acordo de compensação de horas (CLT, art. 59, §2º).`);
+    if (trabalhado > 360 && intervalo < 30) erros.push(`${dia.rotulo}: mais de 6 horas de trabalho exigem pelo menos 1 hora de intervalo para refeição (CLT, art. 71).`);
+    else if (trabalhado > 360 && intervalo < 60) avisos.push(`${dia.rotulo}: intervalo menor que 1 hora só vale se a convenção ou o acordo coletivo permitir (CLT, art. 611-A, III).`);
+    else if (trabalhado > 240 && trabalhado <= 360 && intervalo < 15) avisos.push(`${dia.rotulo}: entre 4 e 6 horas de trabalho, a lei exige 15 minutos de intervalo (CLT, art. 71, §1º).`);
+  }
+  const horasSemana = `${Math.floor(semana / 60)}h${semana % 60 ? String(semana % 60).padStart(2, "0") : ""}`;
+  if (modalidade === "1" && semana > 1800) erros.push(`${horasSemana} por semana. Estágio pode ter no máximo 30 horas semanais (Lei 11.788/2008, art. 10).`);
+  if (modalidade === "2" && semana > 2640) erros.push(`${horasSemana} por semana. Pela CLT o máximo é 44 horas semanais (Constituição, art. 7º, XIII).`);
+  if (modalidade === "2" && dias.every((dia) => dia.trabalha)) erros.push("Sem nenhum dia de folga. A pessoa precisa de um descanso semanal de 24 horas (CLT, art. 67).");
+  return { erros, avisos };
+}
+
+/**
+ * Tolerância fixa da lei, igual para todas as empresas, por isso não se escolhe (CLT, art. 58, §1º): cada batida pode
+ * variar até 5 minutos do horário previsto, somando no máximo 10 minutos no dia. Dentro disso, o dia não gera hora a menos
+ * nem hora extra; a batida continua com o horário real (o ponto não pode trocar o horário marcado). Passou do limite,
+ * conta a diferença inteira (Súmula 366 do TST). A Lei do Estágio não trata de tolerância; usa-se a mesma regra.
+ */
+const TOLERANCIA_POR_BATIDA = 5;
+const TOLERANCIA_POR_DIA = 10;
+
+function dentroDaTolerancia(batidas: Array<{ entrada: string | null; saida: string | null }>, carga: CargaBase | undefined) {
+  if (!carga) return false;
+  const horario = horarioDaCarga(carga);
+  const doDia = TOLERANCIA_POR_DIA;
+  const porBatida = TOLERANCIA_POR_BATIDA;
+  const previstas = horario.pausa ? [horario.entrada, horario.saidaRefeicao, horario.retornoRefeicao, horario.saida] : [horario.entrada, horario.saida];
+  const feitas = batidas.flatMap((batida) => [batida.entrada, batida.saida]).filter((valor): valor is string => Boolean(valor));
+  if (feitas.length !== previstas.length) return false;
+  let soma = 0;
+  for (let i = 0; i < previstas.length; i += 1) {
+    // Em segundos: 5min30s já passa dos 5 minutos da lei.
+    const prevista = segundosRelogio(previstas[i]);
+    const feita = segundosRelogio(feitas[i]);
+    if (prevista === null || feita === null) return false;
+    let diferenca = Math.abs(feita - prevista);
+    diferenca = Math.min(diferenca, 24 * 3600 - diferenca);
+    if (diferenca > porBatida * 60) return false;
+    soma += diferenca;
+  }
+  return soma <= doDia * 60;
+}
+
+/**
+ * Soma de um período do relatório: horas feitas, previstas, saldo (em minutos, com sinal) e ocorrências.
+ * Soma os segundos de verdade de cada dia e só arredonda no fim, para o arredondamento diário não se acumular.
+ */
+function resumoDoPeriodo(dias: Array<{ segundosFeitos: number; segundosCarga: number; saldoSegundos: number; falta: boolean; incompleta: boolean; atestado: boolean; entrada1: string }>) {
+  const soma = (campo: "segundosFeitos" | "segundosCarga" | "saldoSegundos") => paraMinutos(dias.reduce((total, dia) => total + dia[campo], 0));
+  return {
+    feitos: soma("segundosFeitos"),
+    previstos: soma("segundosCarga"),
+    saldo: soma("saldoSegundos"),
+    diasTrabalhados: dias.filter((dia) => dia.entrada1).length,
+    faltas: dias.filter((dia) => dia.falta).length,
+    incompletas: dias.filter((dia) => dia.incompleta).length,
+    atestados: dias.filter((dia) => dia.atestado).length,
+  };
+}
+
+/** "Seg a Sex 08:00–17:00 · Sáb 08:00–12:00": junta dias seguidos com o mesmo horário. */
+function resumoDaJornada(dias: Array<{ rotulo: string; trabalha: boolean; horario: ReturnType<typeof horarioDaCarga> | null }>) {
+  const grupos: Array<{ inicio: string; fim: string; texto: string }> = [];
+  for (const dia of dias) {
+    if (!dia.trabalha) continue;
+    const texto = dia.horario ? `${dia.horario.entrada}–${dia.horario.saida}` : "sem horário";
+    const ultimo = grupos[grupos.length - 1];
+    const anterior = dias[dias.indexOf(dia) - 1];
+    if (ultimo && ultimo.texto === texto && anterior?.trabalha && anterior.rotulo === ultimo.fim) ultimo.fim = dia.rotulo;
+    else grupos.push({ inicio: dia.rotulo, fim: dia.rotulo, texto });
+  }
+  return grupos.map((grupo) => `${grupo.inicio === grupo.fim ? grupo.inicio : `${grupo.inicio} a ${grupo.fim}`} ${grupo.texto}`).join(" · ");
 }
 
 function dataLegado(iso: string) {
@@ -120,11 +257,15 @@ function dataSpDe(iso: string, dias: number) {
   return new Date(Date.UTC(ano, mes - 1, dia + dias)).toISOString().slice(0, 10);
 }
 
+/**
+ * Dias de um período. O teto é alto (cerca de 11 anos) porque o saldo total soma o contrato inteiro; quem limita o
+ * período escolhido na tela é cada relatório.
+ */
 function intervalo(de: string, ate: string) {
   const dias: string[] = [];
   const inicio = new Date(`${de}T12:00:00Z`).getTime();
   const fim = new Date(`${ate}T12:00:00Z`).getTime();
-  for (let cursor = Math.min(inicio, fim); cursor <= Math.max(inicio, fim) && dias.length < 62; cursor += 86_400_000) {
+  for (let cursor = Math.min(inicio, fim); cursor <= Math.max(inicio, fim) && dias.length < 4000; cursor += 86_400_000) {
     dias.push(new Date(cursor).toISOString().slice(0, 10));
   }
   return dias;
@@ -137,6 +278,30 @@ function minutosRelogio(valor: string | null | undefined) {
   const h = Number(hora);
   const m = Number(minuto);
   return Number.isInteger(h) && Number.isInteger(m) ? h * 60 + m : null;
+}
+
+/** "HH:MM" ou "HH:MM:SS" em segundos (sem segundos, conta 0). */
+function segundosRelogio(valor: string | null | undefined) {
+  if (!valor) return null;
+  const [hora, minuto, segundo = "0"] = valor.trim().replace(/^-/, "").split(":");
+  if (hora === undefined || minuto === undefined || hora === "") return null;
+  const [h, m, s] = [Number(hora), Number(minuto), Number(segundo)];
+  return Number.isInteger(h) && Number.isInteger(m) && Number.isInteger(s) ? h * 3600 + m * 60 + s : null;
+}
+
+/** Segundos em minutos arredondando para o mais perto (30s ou mais sobe), com o mesmo sinal. */
+function paraMinutos(segundos: number) {
+  const minutos = Math.round(Math.abs(segundos) / 60);
+  return segundos < 0 ? -minutos : minutos;
+}
+
+/** "HH:MM:SS" entre dois horários (passa da meia-noite), no formato de tabela_ponto.horas_trabalhadas. */
+function horasEntreRelogio(inicio: string, fim: string) {
+  const a = segundosRelogio(inicio);
+  const b = segundosRelogio(fim);
+  if (a === null || b === null) return null;
+  const total = b >= a ? b - a : b - a + 24 * 3600;
+  return [Math.floor(total / 3600), Math.floor((total % 3600) / 60), total % 60].map((parte) => String(parte).padStart(2, "0")).join(":");
 }
 
 function relogio(minutos: number) {
@@ -162,18 +327,19 @@ function minutosDaCarga(carga: { entrada: string | null; saida_refeicao: string 
   return Math.max(0, total);
 }
 
-function minutosTrabalhados(batidas: Array<{ entrada: string | null; saida: string | null; horas: string | null }>, horasBanco: string | null | undefined) {
+/** Tempo trabalhado no dia em segundos (cada trecho com os segundos, sem cortar). */
+function segundosTrabalhados(batidas: Array<{ entrada: string | null; saida: string | null; horas: string | null }>, horasBanco: string | null | undefined) {
   const pelasBatidas = batidas.reduce((soma, batida) => {
-    const registrada = minutosRelogio(batida.horas);
-    if (registrada) return soma + registrada;
-    const entrada = minutosRelogio(batida.entrada);
-    const saida = minutosRelogio(batida.saida);
-    if (entrada === null || saida === null) return soma;
-    const intervaloBatida = saida - entrada;
-    return soma + (intervaloBatida < 0 ? intervaloBatida + 24 * 60 : intervaloBatida);
+    const entrada = segundosRelogio(batida.entrada);
+    const saida = segundosRelogio(batida.saida);
+    if (entrada !== null && saida !== null) {
+      const intervaloBatida = saida - entrada;
+      return soma + (intervaloBatida < 0 ? intervaloBatida + 24 * 3600 : intervaloBatida);
+    }
+    return soma + (segundosRelogio(batida.horas) ?? 0);
   }, 0);
   if (pelasBatidas > 0) return pelasBatidas;
-  return minutosRelogio(horasBanco) ?? 0;
+  return segundosRelogio(horasBanco) ?? 0;
 }
 
 function dinheiro(valor: unknown) {
@@ -318,7 +484,7 @@ export class PortalDadosService {
       select * from (
         -- Uma linha por pessoa: a passagem ativa ou, se todas foram desligadas, a mais recente.
         select distinct on (col.id_candidato)
-               c.nome, c.id_candidato, col.id_colaborador, col.departamento,
+               c.nome, c.id_candidato, col.id_colaborador, col.departamento, c.cpf,
                coalesce(nullif(btrim(col.cargo), ''), ultima.cargo) as cargo,
                m.descricao as modalidade,
                coalesce(nullif(btrim(col.data_inicio), ''), ultima.datainicio) as datainicio,
@@ -331,7 +497,7 @@ export class PortalDadosService {
                  ) then case when coalesce(col.tipo_vaga, ultima.tipo_vaga)::text = '1' then 'Recesso' else 'Férias' end
                  else 'Ativo'
                end as situacao,
-               nullif(concat_ws(' · ', esc.nome, carga.nome), '') as jornada
+               nullif(btrim(esc.nome), '') as jornada
         from dna_work.colaborador col
         join dna_work.candidato c on c.id_candidato = col.id_candidato
         left join lateral (
@@ -346,7 +512,6 @@ export class PortalDadosService {
         left join dna_work.modalidade_vaga m on m.id::text = coalesce(col.tipo_vaga, ultima.tipo_vaga)::text
         left join lateral (select escala from dna_work.carga_horaria ch where ch.id_colaborador = col.id_colaborador limit 1) ch on true
         left join dna_work.ponto_turno_base esc on esc.id = ch.escala and esc.id_empresa = col.id_empresa
-        left join dna_work.ponto_carga_base carga on carga.id::text = col.carga_base::text and carga.id_empresa = col.id_empresa
         where col.id_empresa = $1
           and ($2 = '' or c.nome ilike $3 or coalesce(col.cargo, '') ilike $3 or coalesce(col.departamento, '') ilike $3)
         order by col.id_candidato, case when col.status_colaborador = 1 then 0 else 1 end, col.data_cadastro desc nulls last, col.data_inicio desc nulls last
@@ -373,7 +538,7 @@ export class PortalDadosService {
     return colaborador;
   }
 
-  /** Configuração do ponto da pessoa: se está no ponto, a jornada (escala + carga) e as férias. */
+  /** Configuração do ponto da pessoa: se está no ponto, a jornada (escala com o horário de cada dia) e as férias. */
   async configuracaoPonto(usuarioId: string, empresaId: string, idCandidato: string) {
     await this.garantir(usuarioId, empresaId);
     const colaborador = await this.colaboradorDaEmpresa(empresaId, idCandidato);
@@ -387,45 +552,19 @@ export class PortalDadosService {
     const escala = jornada.rows[0]?.escala;
     return {
       noPonto: Number(colaborador.status_ponto) === 1,
-      escala: escala ? String(escala) : "",
-      carga: colaborador.carga_base && colaborador.carga_base !== "0" ? colaborador.carga_base : "",
+      jornada: escala ? String(escala) : "",
       ferias: ferias.rows,
     };
   }
 
-  /**
-   * Liga escala e carga horária à pessoa, no formato que o ponto e o relatório leem: dna_work.carga_horaria (tipo 1, cada dia
-   * "1" com a carga ou "folga") e colaborador.carga_base.
-   */
+  /** Troca a jornada de trabalho da pessoa (dias e horário de cada dia). */
   async salvarJornada(usuarioId: string, empresaId: string, idCandidato: string, body: Record<string, string>) {
     await this.garantir(usuarioId, empresaId);
     const colaborador = await this.colaboradorDaEmpresa(empresaId, idCandidato);
-    const campos: Record<string, string> = {};
-    const escala = (await this.db.query<Record<string, number | null>>(
-      "select segunda_feira, terca_feira, quarta_feira, quinta_feira, sexta_feira, sabado, domingo from dna_work.ponto_turno_base where id::text = $1 and id_empresa = $2",
-      [body.escala ?? "", empresaId],
-    )).rows[0];
-    if (!escala) campos.escala = "Escolha a escala.";
-    const carga = (await this.db.query("select 1 from dna_work.ponto_carga_base where id::text = $1 and id_empresa = $2", [body.carga ?? "", empresaId])).rowCount;
-    if (!carga) campos.carga = "Escolha a carga horária.";
-    const primeiro = Object.values(campos)[0];
-    if (primeiro) throw new AppError(422, "VALIDACAO", Object.keys(campos).length > 1 ? "Escolha a escala e a carga horária." : primeiro, campos);
-    const dias: Array<[string, string]> = [
-      ["segunda", "segunda_feira"], ["terca", "terca_feira"], ["quarta", "quarta_feira"], ["quinta", "quinta_feira"],
-      ["sexta", "sexta_feira"], ["sabado", "sabado"], ["domingo", "domingo"],
-    ];
-    const valores = dias.flatMap(([, coluna]) => (Number(escala![coluna]) === 1 ? ["1", body.carga] : ["folga", ""]));
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
-      await client.query("delete from dna_work.carga_horaria where id_colaborador = $1", [colaborador.id_colaborador]);
-      await client.query(`
-        insert into dna_work.carga_horaria (
-          id_colaborador, tipo, escala, segunda, segunda_carga, terca, terca_carga, quarta, quarta_carga,
-          quinta, quinta_carga, sexta, sexta_carga, sabado, sabado_carga, domingo, domingo_carga
-        ) values ($1,'1',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-      `, [colaborador.id_colaborador, Number(body.escala), ...valores]);
-      await client.query("update dna_work.colaborador set carga_base = $2 where id_colaborador = $1", [colaborador.id_colaborador, Number(body.carga)]);
+      await this.aplicarJornada(client, colaborador.id_colaborador, empresaId, body.jornada ?? "");
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -442,15 +581,27 @@ export class PortalDadosService {
    * atestados ficam. A pessoa sai da lista principal, não bate mais ponto e aparece no filtro "Desligados".
    * Reativar não volta esta linha: o cadastro cria uma passagem nova (salvarColaborador com reativar), que começa do zero.
    */
-  async desligarColaborador(usuarioId: string, empresaId: string, idCandidato: string) {
+  async desligarColaborador(usuarioId: string, empresaId: string, idCandidato: string, ultimoDia?: string) {
     await this.garantir(usuarioId, empresaId);
-    await this.colaboradorDaEmpresa(empresaId, idCandidato);
+    const atual = await this.colaboradorDaEmpresa(empresaId, idCandidato);
+    // Último dia de trabalho (padrão: hoje). Depois dele o relatório não conta falta.
+    const hoje = dataSp(0);
+    const dia = ultimoDia ? dataValida(ultimoDia) : hoje;
+    if (!dia) throw new AppError(422, "VALIDACAO", "Informe o último dia de trabalho.", { ultimoDia: "Informe o último dia de trabalho." });
+    if (dia > hoje) throw new AppError(422, "VALIDACAO", "O último dia de trabalho não pode ser no futuro.", { ultimoDia: "Use hoje ou uma data passada." });
+    const inicio = (await this.db.query<{ inicio: string | null }>("select replace(data_inicio, '/', '-') as inicio from dna_work.colaborador where id_colaborador = $1", [atual.id_colaborador])).rows[0]?.inicio;
+    if (inicio && /^\d{4}-\d{2}-\d{2}$/.test(inicio) && dia < inicio) {
+      throw new AppError(422, "VALIDACAO", "O último dia não pode ser antes do início do contrato.", { ultimoDia: "Antes do início do contrato." });
+    }
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
+      // Só a passagem ativa ganha a data; contratos já encerrados ficam com a deles.
       await client.query(
-        "update dna_work.colaborador set status_colaborador = 0, status_ponto = 0 where id_candidato = $1 and id_empresa = $2",
-        [idCandidato, empresaId],
+        `update dna_work.colaborador set status_colaborador = 0, status_ponto = 0,
+           data_desligamento = case when coalesce(status_colaborador, 1) = 1 then $3 else data_desligamento end
+         where id_candidato = $1 and id_empresa = $2`,
+        [idCandidato, empresaId, dataLegado(dia)],
       );
       // Sem outra empresa em que a pessoa siga ativa, ela deixa de aparecer como colaboradora.
       await client.query(`
@@ -566,42 +717,177 @@ export class PortalDadosService {
     }));
   }
 
-  async escalas(usuarioId: string, empresaId: string) {
+  /**
+   * Jornadas da empresa. Jornada = dna_work.ponto_turno_base (dias de trabalho, 1/0) com o horário de cada dia na própria
+   * linha (segunda_carga… domingo_carga → ponto_carga_base). Escalas antigas sem horário aparecem como incompletas.
+   */
+  async jornadas(usuarioId: string, empresaId: string) {
     await this.garantir(usuarioId, empresaId);
-    const rows = await this.db.query(`
-      select id, nome,
-             case when segunda_feira::text = '1' then 'Trabalha' else 'Folga' end as segunda,
-             case when terca_feira::text = '1' then 'Trabalha' else 'Folga' end as terca,
-             case when quarta_feira::text = '1' then 'Trabalha' else 'Folga' end as quarta,
-             case when quinta_feira::text = '1' then 'Trabalha' else 'Folga' end as quinta,
-             case when sexta_feira::text = '1' then 'Trabalha' else 'Folga' end as sexta,
-             case when sabado::text = '1' then 'Trabalha' else 'Folga' end as sabado,
-             case when domingo::text = '1' then 'Trabalha' else 'Folga' end as domingo
-      from dna_work.ponto_turno_base
-      where id_empresa = $1
-      order by nome
-    `, [empresaId]);
-    return rows.rows;
+    return this.lerJornadas(empresaId);
   }
 
-  /** Escala: dna_work.ponto_turno_base guarda 1 (trabalha) ou 0 (folga) em cada dia da semana. */
-  async salvarEscala(usuarioId: string, empresaId: string, body: Record<string, string>) {
+  async jornada(usuarioId: string, empresaId: string, id: string) {
+    await this.garantir(usuarioId, empresaId);
+    const jornada = (await this.lerJornadas(empresaId, id))[0];
+    if (!jornada) throw new AppError(404, "JORNADA_NAO_ENCONTRADA", "Jornada não encontrada.");
+    return jornada;
+  }
+
+  private async lerJornadas(empresaId: string, id?: string) {
+    const [turnos, cargas] = await Promise.all([
+      this.db.query<Record<string, string | number | null>>(`
+        select t.*,
+               (select count(distinct col.id_colaborador)::int from dna_work.carga_horaria ch
+                  join dna_work.colaborador col on col.id_colaborador = ch.id_colaborador
+                 where ch.escala = t.id and col.id_empresa = t.id_empresa and coalesce(col.status_colaborador, 1) = 1) as colaboradores
+        from dna_work.ponto_turno_base t
+        where t.id_empresa = $1 and ($2 = '' or t.id::text = $2)
+        order by t.nome
+      `, [empresaId, id ?? ""]),
+      this.db.query<CargaBase>(
+        "select id, entrada, saida_refeicao, retorno_refeicao, saida, tolerancia, pausa from dna_work.ponto_carga_base where id_empresa = $1",
+        [empresaId],
+      ),
+    ]);
+    const porId = new Map(cargas.rows.map((carga) => [String(carga.id), carga]));
+    return turnos.rows.map((turno) => {
+      const dias = DIAS_SEMANA.map(({ chave, coluna, rotulo }) => {
+        const trabalha = Number(turno[coluna]) === 1;
+        const carga = trabalha && turno[`${chave}_carga`] != null ? porId.get(String(turno[`${chave}_carga`])) : undefined;
+        return {
+          dia: chave,
+          rotulo,
+          trabalha,
+          horario: carga ? horarioDaCarga(carga) : null,
+        };
+      });
+      return {
+        id: Number(turno.id),
+        nome: String(turno.nome ?? ""),
+        // 1 estágio, 2 CLT; vazio nas escalas antigas.
+        modalidade: turno.modalidade == null ? "" : String(turno.modalidade),
+        dias,
+        // Escala antiga, sem o horário de algum dia de trabalho: precisa ser completada antes de ligar a alguém.
+        completa: dias.every((dia) => !dia.trabalha || dia.horario),
+        resumo: resumoDaJornada(dias),
+        colaboradores: Number(turno.colaboradores ?? 0),
+      };
+    });
+  }
+
+  /**
+   * Cadastra ou altera a jornada. Cada dia de trabalho ganha uma carga (ponto_carga_base): reaproveita a da empresa com o
+   * mesmo horário ou cria uma. Ao alterar, quem já usa a jornada passa a seguir o horário novo (as batidas antigas
+   * guardam a carga da época em tabela_ponto.id_carga).
+   */
+  async salvarJornadaEmpresa(usuarioId: string, empresaId: string, body: Record<string, string>, id?: string) {
     await this.garantir(usuarioId, empresaId);
     const nome = (body.nome ?? "").trim().slice(0, 255);
-    if (nome.length < 2) throw new AppError(422, "VALIDACAO", "Informe o nome da escala.", { nome: "Informe o nome da escala." });
-    const dias = ["segunda", "terca", "quarta", "quinta", "sexta", "sabado", "domingo"].map((chave) => (body[chave] === "1" ? 1 : 0));
-    if (!dias.some(Boolean)) throw new AppError(422, "VALIDACAO", "Marque pelo menos um dia de trabalho.");
-    const id = await this.proximo("ponto_turno_base", "id");
-    await this.db.query(`
-      insert into dna_work.ponto_turno_base
-        (id, nome, id_empresa, segunda_feira, terca_feira, quarta_feira, quinta_feira, sexta_feira, sabado, domingo)
-      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-    `, [id, nome, empresaId, ...dias]);
-    return { id };
+    // A tolerância é a da lei, igual para todos (ver dentroDaTolerancia); a carga guarda os 5 min por batida.
+    const tolerancia = String(TOLERANCIA_POR_BATIDA);
+    const hora = /^([01]\d|2[0-3]):[0-5]\d$/;
+    const campos: Record<string, string> = {};
+    const modalidade = body.modalidade === "1" || body.modalidade === "2" ? body.modalidade : null;
+    if (nome.length < 2) campos.nome = "Informe o nome da jornada.";
+    if (!modalidade) campos.modalidade = "Escolha se a jornada é de estágio ou CLT.";
+    const dias = DIAS_SEMANA.map(({ chave, rotulo }) => {
+      const trabalha = body[chave] === "1";
+      const pausa = body[`${chave}_pausa`] === "1";
+      const entrada = body[`${chave}_entrada`] ?? "";
+      const saida = body[`${chave}_saida`] ?? "";
+      const saidaRefeicao = body[`${chave}_saida_refeicao`] ?? "";
+      const retornoRefeicao = body[`${chave}_retorno_refeicao`] ?? "";
+      if (trabalha) {
+        if (!hora.test(entrada)) campos[`${chave}_entrada`] = `Informe a entrada de ${rotulo.toLowerCase()}.`;
+        if (!hora.test(saida)) campos[`${chave}_saida`] = `Informe a saída de ${rotulo.toLowerCase()}.`;
+        else if (saida === entrada) campos[`${chave}_saida`] = "A saída precisa ser diferente da entrada.";
+        if (pausa && !hora.test(saidaRefeicao)) campos[`${chave}_saida_refeicao`] = "Informe a saída para a refeição.";
+        if (pausa && !hora.test(retornoRefeicao)) campos[`${chave}_retorno_refeicao`] = "Informe o retorno da refeição.";
+      }
+      return { chave, rotulo, trabalha, pausa, entrada, saida, saidaRefeicao, retornoRefeicao };
+    });
+    if (!dias.some((dia) => dia.trabalha)) campos.dias = "Marque pelo menos um dia de trabalho.";
+    const primeiro = Object.values(campos)[0];
+    if (primeiro) throw new AppError(422, "VALIDACAO", Object.keys(campos).length > 1 ? "Confira os campos marcados." : primeiro, campos);
+    // O que a lei não permite não é salvo; o que depende de acordo ou convenção a tela só avisa.
+    const { erros } = regrasDaJornada(modalidade!, dias);
+    if (erros.length) throw new AppError(422, "JORNADA_FORA_DA_LEI", erros[0], { lei: erros.join("\n") });
+
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("select pg_advisory_xact_lock(hashtext('dna_work.ponto_jornada'))");
+      if (id) {
+        const existe = await client.query("select 1 from dna_work.ponto_turno_base where id::text = $1 and id_empresa = $2", [id, empresaId]);
+        if (!existe.rowCount) throw new AppError(404, "JORNADA_NAO_ENCONTRADA", "Jornada não encontrada.");
+      }
+      const cargaDoDia: Record<string, number | null> = {};
+      for (const dia of dias) {
+        if (!dia.trabalha) { cargaDoDia[dia.chave] = null; continue; }
+        // Sem pausa, o sistema antigo grava a refeição igual à saída.
+        const saidaRefeicao = dia.pausa ? dia.saidaRefeicao : dia.saida;
+        const retornoRefeicao = dia.pausa ? dia.retornoRefeicao : dia.saida;
+        const igual = await client.query<{ id: number }>(`
+          select id from dna_work.ponto_carga_base
+          where id_empresa = $1 and entrada = $2 and saida = $3 and coalesce(saida_refeicao, '') = $4
+            and coalesce(retorno_refeicao, '') = $5 and coalesce(nullif(tolerancia, ''), '0') = $6 and coalesce(pausa, 0) = $7
+          order by id limit 1
+        `, [empresaId, dia.entrada, dia.saida, saidaRefeicao, retornoRefeicao, tolerancia, dia.pausa ? 1 : 0]);
+        let idCarga = igual.rows[0]?.id;
+        if (!idCarga) {
+          idCarga = Number((await client.query<{ id: string }>("select coalesce(max(id), 0) + 1 as id from dna_work.ponto_carga_base")).rows[0].id);
+          await client.query(`
+            insert into dna_work.ponto_carga_base
+              (id, id_empresa, nome, tipo, entrada, saida_refeicao, retorno_refeicao, saida, tolerancia, pausa)
+            values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          `, [
+            idCarga, empresaId, `${dia.entrada} às ${dia.saida}`, tipoDaJornada(dia.entrada, dia.saida),
+            dia.entrada, saidaRefeicao, retornoRefeicao, dia.saida, tolerancia, dia.pausa ? 1 : 0,
+          ]);
+        }
+        cargaDoDia[dia.chave] = idCarga;
+      }
+      const flags = dias.map((dia) => (dia.trabalha ? 1 : 0));
+      const cargasDias = DIAS_SEMANA.map(({ chave }) => cargaDoDia[chave]);
+      let idJornada: number;
+      if (id) {
+        idJornada = Number(id);
+        await client.query(`
+          update dna_work.ponto_turno_base set nome = $3,
+            segunda_feira = $4, terca_feira = $5, quarta_feira = $6, quinta_feira = $7, sexta_feira = $8, sabado = $9, domingo = $10,
+            segunda_carga = $11, terca_carga = $12, quarta_carga = $13, quinta_carga = $14, sexta_carga = $15, sabado_carga = $16, domingo_carga = $17,
+            modalidade = $18
+          where id = $1 and id_empresa = $2
+        `, [idJornada, empresaId, nome, ...flags, ...cargasDias, Number(modalidade)]);
+        // Quem já usa a jornada passa a seguir o horário novo.
+        const usam = await client.query<{ id_colaborador: string }>(`
+          select ch.id_colaborador from dna_work.carga_horaria ch
+          join dna_work.colaborador col on col.id_colaborador = ch.id_colaborador
+          where ch.escala = $1 and col.id_empresa = $2
+        `, [idJornada, empresaId]);
+        for (const linha of usam.rows) await this.aplicarJornada(client, linha.id_colaborador, empresaId, String(idJornada));
+      } else {
+        idJornada = Number((await client.query<{ id: string }>("select coalesce(max(id), 0) + 1 as id from dna_work.ponto_turno_base")).rows[0].id);
+        await client.query(`
+          insert into dna_work.ponto_turno_base
+            (id, nome, id_empresa, segunda_feira, terca_feira, quarta_feira, quinta_feira, sexta_feira, sabado, domingo,
+             segunda_carga, terca_carga, quarta_carga, quinta_carga, sexta_carga, sabado_carga, domingo_carga, modalidade)
+          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        `, [idJornada, nome, empresaId, ...flags, ...cargasDias, Number(modalidade)]);
+      }
+      await this.limparCargasSoltas(client, empresaId);
+      await client.query("COMMIT");
+      return { id: idJornada };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
-  /** Apaga a escala da empresa. Escala ligada a colaborador ou a dia marcado não sai: o ponto deixaria de saber os dias de folga. */
-  async excluirEscala(usuarioId: string, empresaId: string, id: string) {
+  /** Apaga a jornada. Em uso por colaborador ou dia marcado não sai: o ponto deixaria de saber os dias e o horário dele. */
+  async excluirJornada(usuarioId: string, empresaId: string, id: string) {
     await this.garantir(usuarioId, empresaId);
     const uso = await this.db.query<{ colaboradores: number; dias: number }>(`
       select
@@ -614,77 +900,82 @@ export class PortalDadosService {
     `, [id, empresaId]);
     const { colaboradores, dias } = uso.rows[0];
     if (colaboradores || dias) {
-      throw new AppError(409, "ESCALA_EM_USO", colaboradores
-        ? `Esta escala está em uso por ${colaboradores} ${colaboradores === 1 ? "colaborador" : "colaboradores"}. Troque a escala deles antes de apagar.`
-        : "Esta escala está marcada em dias de trabalho de colaboradores e não pode ser apagada.");
+      throw new AppError(409, "JORNADA_EM_USO", colaboradores
+        ? `Esta jornada está em uso por ${colaboradores} ${colaboradores === 1 ? "colaborador" : "colaboradores"}. Troque a jornada deles antes de apagar.`
+        : "Esta jornada está marcada em dias de trabalho de colaboradores e não pode ser apagada.");
     }
-    const apagada = await this.db.query("delete from dna_work.ponto_turno_base where id::text = $1 and id_empresa = $2", [id, empresaId]);
-    if (!apagada.rowCount) throw new AppError(404, "ESCALA_NAO_ENCONTRADA", "Escala não encontrada.");
-    return { id };
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+      const apagada = await client.query("delete from dna_work.ponto_turno_base where id::text = $1 and id_empresa = $2", [id, empresaId]);
+      if (!apagada.rowCount) throw new AppError(404, "JORNADA_NAO_ENCONTRADA", "Jornada não encontrada.");
+      await this.limparCargasSoltas(client, empresaId);
+      await client.query("COMMIT");
+      return { id };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
-  /** Apaga a carga horária. Carga usada por colaborador, dia marcado ou batida já registrada não sai: o histórico do ponto depende dela. */
-  async excluirCarga(usuarioId: string, empresaId: string, id: string) {
-    await this.garantir(usuarioId, empresaId);
-    const uso = await this.db.query<{ colaboradores: number; batidas: number }>(`
-      select
-        (select count(distinct col.id_colaborador)::int from dna_work.colaborador col
-           left join dna_work.carga_horaria ch on ch.id_colaborador = col.id_colaborador
-          where col.id_empresa = $2
-            and (col.carga_base::text = $1
-              or $1 in (ch.segunda_carga::text, ch.terca_carga::text, ch.quarta_carga::text, ch.quinta_carga::text,
-                        ch.sexta_carga::text, ch.sabado_carga::text, ch.domingo_carga::text)
-              or exists (select 1 from dna_work.ponto_data_trabalho d where d.id_colaborador = col.id_colaborador and d.id_carga_horaria::text = $1))) as colaboradores,
-        (select count(*)::int from dna_work.tabela_ponto t
-           join dna_work.colaborador col on col.id_colaborador = t.id_colaborador
-          where t.id_carga::text = $1 and col.id_empresa = $2) as batidas
-    `, [id, empresaId]);
-    const { colaboradores, batidas } = uso.rows[0];
-    if (batidas) throw new AppError(409, "CARGA_COM_BATIDAS", "Esta carga horária já tem batidas de ponto registradas e não pode ser apagada.");
-    if (colaboradores) {
-      throw new AppError(409, "CARGA_EM_USO", `Esta carga horária está em uso por ${colaboradores} ${colaboradores === 1 ? "colaborador" : "colaboradores"}. Troque a carga deles antes de apagar.`);
-    }
-    const apagada = await this.db.query("delete from dna_work.ponto_carga_base where id::text = $1 and id_empresa = $2", [id, empresaId]);
-    if (!apagada.rowCount) throw new AppError(404, "CARGA_NAO_ENCONTRADA", "Carga horária não encontrada.");
-    return { id };
-  }
-
-  async cargas(usuarioId: string, empresaId: string) {
-    await this.garantir(usuarioId, empresaId);
-    const rows = await this.db.query(`
-      select id, nome, tipo, entrada, saida_refeicao, retorno_refeicao, saida, tolerancia, pausa
-      from dna_work.ponto_carga_base
-      where id_empresa = $1
-      order by nome
+  /**
+   * Horários (ponto_carga_base) criados pelas jornadas do portal que ficaram sem uso: nenhuma jornada, colaborador, dia
+   * marcado ou batida aponta para eles. Só apaga os do formato do portal ("08:00 às 17:00"); os do sistema antigo ficam.
+   */
+  private async limparCargasSoltas(client: { query: Pool["query"] }, empresaId: string) {
+    await client.query(`
+      delete from dna_work.ponto_carga_base c
+      where c.id_empresa = $1
+        and c.nome ~ '^[0-2][0-9]:[0-5][0-9] às [0-2][0-9]:[0-5][0-9]$'
+        and not exists (
+          select 1 from dna_work.ponto_turno_base t
+          where t.id_empresa = $1 and c.id in (t.segunda_carga, t.terca_carga, t.quarta_carga, t.quinta_carga, t.sexta_carga, t.sabado_carga, t.domingo_carga)
+        )
+        and not exists (
+          select 1 from dna_work.colaborador col
+          left join dna_work.carga_horaria ch on ch.id_colaborador = col.id_colaborador
+          where col.id_empresa = $1
+            and (col.carga_base::text = c.id::text
+              or c.id::text in (ch.segunda_carga, ch.terca_carga, ch.quarta_carga, ch.quinta_carga, ch.sexta_carga, ch.sabado_carga, ch.domingo_carga))
+        )
+        and not exists (select 1 from dna_work.ponto_data_trabalho d where d.id_carga_horaria::text = c.id::text)
+        and not exists (select 1 from dna_work.tabela_ponto tp where tp.id_carga = c.id::text)
     `, [empresaId]);
-    return rows.rows;
   }
 
-  async salvarCarga(usuarioId: string, empresaId: string, body: Record<string, string>) {
-    await this.garantir(usuarioId, empresaId);
-    const pausa = body.pausa === "1" ? 1 : 0;
-    const saida = body.saida;
-    const hora = /^([01]\d|2[0-3]):[0-5]\d$/;
-    const campos: Record<string, string> = {};
-    if ((body.nome ?? "").trim().length < 2) campos.nome = "Informe o nome da carga horária.";
-    if (!hora.test(body.entrada ?? "")) campos.entrada = "Informe a entrada.";
-    if (!hora.test(saida ?? "")) campos.saida = "Informe a saída.";
-    if (body.pausa !== "1" && body.pausa !== "0") campos.pausa = "Diga se há pausa para refeição.";
-    if (pausa && !hora.test(body.saidaRefeicao ?? "")) campos.saidaRefeicao = "Informe a saída para a refeição.";
-    if (pausa && !hora.test(body.retornoRefeicao ?? "")) campos.retornoRefeicao = "Informe o retorno da refeição.";
-    if (body.tolerancia && !/^\d{1,3}$/.test(body.tolerancia.trim())) campos.tolerancia = "Use só números (minutos).";
-    const primeiro = Object.values(campos)[0];
-    if (primeiro) throw new AppError(422, "VALIDACAO", Object.keys(campos).length > 1 ? "Confira os campos marcados." : primeiro, campos);
-    const id = await this.proximo("ponto_carga_base", "id");
-    await this.db.query(`
-      insert into dna_work.ponto_carga_base
-        (id, id_empresa, nome, tipo, entrada, saida_refeicao, retorno_refeicao, saida, tolerancia, pausa)
-      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-    `, [
-      id, empresaId, body.nome, tipoDaJornada(body.entrada, saida),
-      body.entrada, pausa ? body.saidaRefeicao : saida, pausa ? body.retornoRefeicao : saida, saida, body.tolerancia || "0", pausa,
-    ]);
-    return { id };
+  /**
+   * Liga a jornada à pessoa no formato que o ponto e o relatório leem: dna_work.carga_horaria (tipo 1, escala = jornada,
+   * cada dia "1" com a carga do dia ou "folga") e colaborador.carga_base (a carga do primeiro dia de trabalho).
+   */
+  private async aplicarJornada(client: { query: Pool["query"] }, idColaborador: string, empresaId: string, idJornada: string) {
+    const turno = (await client.query<Record<string, number | null>>(
+      `select ${DIAS_SEMANA.map(({ chave, coluna }) => `${coluna}, ${chave}_carga`).join(", ")}, modalidade,
+              (select tipo_vaga from dna_work.colaborador where id_colaborador = $3) as modalidade_pessoa
+       from dna_work.ponto_turno_base where id::text = $1 and id_empresa = $2`,
+      [idJornada, empresaId, idColaborador],
+    )).rows[0];
+    if (!turno) throw new AppError(422, "VALIDACAO", "Escolha a jornada de trabalho.", { jornada: "Escolha a jornada de trabalho." });
+    // Jornada de estágio não serve para CLT, nem o contrário (os limites da lei são outros).
+    if (turno.modalidade != null && turno.modalidade_pessoa != null && Number(turno.modalidade) !== Number(turno.modalidade_pessoa)) {
+      const deQuem = Number(turno.modalidade) === 1 ? "estágio" : "CLT";
+      throw new AppError(422, "JORNADA_OUTRA_MODALIDADE", `Esta jornada é de ${deQuem} e não serve para a modalidade da pessoa.`, { jornada: `Jornada de ${deQuem}: escolha uma da mesma modalidade da pessoa.` });
+    }
+    const dias = DIAS_SEMANA.map(({ chave, coluna }) => ({ trabalha: Number(turno[coluna]) === 1, carga: turno[`${chave}_carga`] }));
+    if (dias.some((dia) => dia.trabalha && dia.carga == null)) {
+      throw new AppError(422, "JORNADA_INCOMPLETA", "Esta jornada não tem o horário de todos os dias. Complete-a em Jornadas de trabalho.", { jornada: "Jornada sem horário em algum dia." });
+    }
+    const valores = dias.flatMap((dia) => (dia.trabalha ? ["1", String(dia.carga)] : ["folga", ""]));
+    await client.query("delete from dna_work.carga_horaria where id_colaborador = $1", [idColaborador]);
+    await client.query(`
+      insert into dna_work.carga_horaria (
+        id_colaborador, tipo, escala, segunda, segunda_carga, terca, terca_carga, quarta, quarta_carga,
+        quinta, quinta_carga, sexta, sexta_carga, sabado, sabado_carga, domingo, domingo_carga
+      ) values ($1,'1',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+    `, [idColaborador, Number(idJornada), ...valores]);
+    const base = dias.find((dia) => dia.trabalha)?.carga ?? null;
+    await client.query("update dna_work.colaborador set carga_base = $2 where id_colaborador = $1", [idColaborador, base]);
   }
 
   /** Feriados cadastrados pela empresa, como estão no banco (fixo = repete todo ano; facultativo = não para o ponto). */
@@ -774,6 +1065,19 @@ export class PortalDadosService {
     return new Set(chaves.filter((chave) => dias.has(chave)));
   }
 
+  /**
+   * Nova senha provisória do app do ponto (esqueceu a senha ou ainda não tinha). A pessoa troca no próximo login.
+   * :id = id_candidato, de alguém que é ou foi colaborador desta empresa.
+   */
+  async redefinirSenhaColaborador(usuarioId: string, empresaId: string, idCandidato: string, senha: string) {
+    await this.garantir(usuarioId, empresaId);
+    if (senha.length < SENHA_MINIMA) throw new AppError(422, "VALIDACAO", "Use pelo menos 6 caracteres.", { senha: "Use pelo menos 6 caracteres." });
+    const daqui = await this.db.query("select 1 from dna_work.colaborador where id_candidato = $1 and id_empresa = $2 limit 1", [idCandidato, empresaId]);
+    if (!daqui.rowCount) throw new AppError(404, "COLABORADOR_NAO_ENCONTRADO", "Colaborador não encontrado.");
+    await gravarSenha(this.db, idCandidato, senha, true);
+    return { ok: true };
+  }
+
   async salvarColaborador(usuarioId: string, empresaId: string, body: Record<string, string>) {
     await this.garantir(usuarioId, empresaId);
     const nome = body.nome?.trim() ?? "";
@@ -782,10 +1086,24 @@ export class PortalDadosService {
     if (nome.length < 2) throw new AppError(422, "NOME_CURTO", "Informe o nome do colaborador.");
     if (cpf.length !== 11) throw new AppError(422, "CPF_INVALIDO", "Informe o CPF com 11 números.");
     if (cargo.length < 2) throw new AppError(422, "CARGO_CURTO", "Informe o cargo.");
-    // Modalidade decide férias (CLT) ou recesso (estágio): sem contratação pela DNA, só vem daqui.
-    if (body.modalidade !== "1" && body.modalidade !== "2") {
-      throw new AppError(422, "VALIDACAO", "Escolha a modalidade.", { modalidade: "Escolha CLT ou Estágio." });
+    // Senha do primeiro acesso ao app do ponto: a empresa cria e a pessoa troca no primeiro login.
+    const senha = body.senha ?? "";
+    if (senha.length < SENHA_MINIMA) {
+      throw new AppError(422, "VALIDACAO", "Crie a senha do primeiro acesso com pelo menos 6 caracteres.", { senha: "Use pelo menos 6 caracteres." });
     }
+    if (!body.jornada) {
+      throw new AppError(422, "VALIDACAO", "Escolha a jornada de trabalho.", { jornada: "Escolha a jornada de trabalho." });
+    }
+    // A modalidade (1 estágio, 2 CLT) vem da jornada escolhida: ela decide férias ou recesso e os limites da lei.
+    const daJornada = (await this.db.query<{ modalidade: number | null }>(
+      "select modalidade from dna_work.ponto_turno_base where id::text = $1 and id_empresa = $2",
+      [body.jornada, empresaId],
+    )).rows[0];
+    if (!daJornada) throw new AppError(422, "VALIDACAO", "Escolha a jornada de trabalho.", { jornada: "Escolha a jornada de trabalho." });
+    if (daJornada.modalidade !== 1 && daJornada.modalidade !== 2) {
+      throw new AppError(422, "JORNADA_SEM_MODALIDADE", "Esta jornada ainda não diz se é de estágio ou CLT. Complete-a em Jornadas de trabalho.", { jornada: "Jornada sem modalidade: complete-a em Jornadas de trabalho." });
+    }
+    const modalidade = daJornada.modalidade;
     const existente = await this.db.query<{ id_candidato: string }>(`
       select id_candidato from dna_work.candidato
       where regexp_replace(coalesce(cpf, ''), '\\D', '', 'g') = $1
@@ -830,9 +1148,12 @@ export class PortalDadosService {
       `, [
         idColaborador, idCandidato, empresaId, inicio, body.departamento?.trim().slice(0, 255) || null, cargo,
         dataLegado(new Date().toISOString().slice(0, 10)),
-        // Modalidade (dna_work.modalidade_vaga): 1 estágio, 2 CLT. Sem contratação pela DNA, é daqui que a lista tira a modalidade.
-        body.modalidade === "1" || body.modalidade === "2" ? Number(body.modalidade) : null,
+        // Modalidade (dna_work.modalidade_vaga): 1 estágio, 2 CLT, a da jornada. Sem contratação pela DNA, a lista tira daqui.
+        modalidade,
       ]);
+      // Os dias e horários de trabalho entram junto com o cadastro: sem eles o ponto trata todo dia como folga.
+      await this.aplicarJornada(client, idColaborador, empresaId, body.jornada ?? "");
+      await gravarSenha(client, idCandidato, senha, true);
       await client.query("COMMIT");
       return { id: idColaborador };
     } catch (error) {
@@ -960,24 +1281,224 @@ export class PortalDadosService {
     }
   }
 
-  async relatorioPonto(usuarioId: string, empresaId: string) {
+  /**
+   * Relatório de ponto do período (padrão: a semana atual, de segunda até hoje), uma linha por colaborador: horas feitas,
+   * previstas, saldo do período, saldo total do contrato e ocorrências. Entra quem está ativo e quem foi desligado
+   * dentro do período.
+   */
+  /** Pedidos de ajuste de ponto dos colaboradores da empresa (tabela antiga "justificativa"). Pendentes primeiro. */
+  async solicitacoesPonto(usuarioId: string, empresaId: string, situacao: "pendentes" | "todas") {
     await this.garantir(usuarioId, empresaId);
-    const rows = await this.db.query(`
-      select c.id_candidato, c.nome,
-             t.data,
-             coalesce(nullif(btrim(t.entrada_editado), ''), t.entrada) as entrada,
-             coalesce(nullif(btrim(t.saida_editado), ''), t.saida) as saida,
-             t.horas_trabalhadas as horas
-      from dna_work.tabela_ponto t
+    const rows = await this.db.query<{
+      id: number; id_candidato: string; nome: string | null; data: string; tipo: string; hora: string | null; texto: string | null;
+      aceite: number | null; resposta: string | null; entrada: string | null; saida: string | null; entrada_atual: string | null; saida_atual: string | null;
+    }>(`
+      select j.id, col.id_candidato, c.nome, t.data, j.tipo, j.hora, j.texto, j.aceite, j.resposta, t.entrada, t.saida,
+             coalesce(nullif(t.entrada_editado, ''), t.entrada) as entrada_atual, coalesce(nullif(t.saida_editado, ''), t.saida) as saida_atual
+      from dna_work.justificativa j
+      join dna_work.tabela_ponto t on t.id = j.id_ponto
       join dna_work.colaborador col on col.id_colaborador = t.id_colaborador
-      left join dna_work.candidato c on c.id_candidato = col.id_candidato
+      join dna_work.candidato c on c.id_candidato = col.id_candidato
+      where col.id_empresa = $1 and j.tipo in ('entrada', 'saida') and ($2 = 'todas' or j.aceite is null)
+      order by (j.aceite is null) desc, t.data desc, j.id desc
+      limit 300
+    `, [empresaId, situacao]);
+    const inclusoes = await this.db.query<{ id: number; id_candidato: string; nome: string | null; data: string; entrada: string; saida: string | null; motivo: string; aceite: number | null; resposta: string | null }>(`
+      select i.id, col.id_candidato, c.nome, i.data, i.entrada, i.saida, i.motivo, i.aceite, i.resposta
+      from dna_work.ponto_inclusao i
+      join dna_work.colaborador col on col.id_colaborador = i.id_colaborador
+      join dna_work.candidato c on c.id_candidato = col.id_candidato
+      where col.id_empresa = $1 and ($2 = 'todas' or i.aceite is null)
+      order by i.data desc, i.id desc
+      limit 300
+    `, [empresaId, situacao]);
+    const br = (data: string) => data.replaceAll("-", "/").split("/").reverse().join("/");
+    const nomeSituacao = (aceite: number | null) => (aceite === 1 ? "Aprovada" : aceite === 0 ? "Recusada" : "Pendente");
+    const todos = [
+      ...rows.rows.map((linha) => ({
+        origem: "ajuste" as const,
+        id: linha.id,
+        id_candidato: linha.id_candidato,
+        nome: linha.nome ?? "",
+        dataIso: linha.data.replaceAll("/", "-"),
+        data: br(linha.data),
+        tipo: linha.tipo === "saida" ? "Saída" : "Entrada",
+        // O que o relógio gravou (não muda nunca) e o que vale hoje (pode já ter sido ajustado).
+        registrado: (linha.tipo === "saida" ? linha.saida : linha.entrada) || "",
+        atual: (linha.tipo === "saida" ? linha.saida_atual : linha.entrada_atual) || "",
+        pedido: (linha.hora ?? "").slice(0, 5),
+        motivo: linha.texto ?? "",
+        situacao: nomeSituacao(linha.aceite),
+        resposta: linha.resposta ?? "",
+      })),
+      ...inclusoes.rows.map((linha) => ({
+        origem: "inclusao" as const,
+        id: linha.id,
+        id_candidato: linha.id_candidato,
+        nome: linha.nome ?? "",
+        dataIso: linha.data.replaceAll("/", "-"),
+        data: br(linha.data),
+        tipo: "Inclusão",
+        registrado: "",
+        atual: "",
+        pedido: `${linha.entrada} às ${linha.saida ?? "—"}`,
+        motivo: linha.motivo,
+        situacao: nomeSituacao(linha.aceite),
+        resposta: linha.resposta ?? "",
+      })),
+    ];
+    return todos.sort((a, b) => (a.situacao === "Pendente" ? 0 : 1) - (b.situacao === "Pendente" ? 0 : 1) || b.dataIso.localeCompare(a.dataIso));
+  }
+
+  /**
+   * Aprova ou recusa a inclusão de um período esquecido. Aprovada, vira uma batida sem horário do relógio (entrada e
+   * saida vazias) e só com os horários corrigidos, marcada como tratada por quem aprovou: assim fica identificada como
+   * marcação incluída, e o motivo, quem aprovou e quando ficam em ponto_inclusao (Portaria 671/2021).
+   */
+  async responderInclusao(usuarioId: string, empresaId: string, id: number, aprovar: boolean, respostaInformada: string) {
+    await this.garantir(usuarioId, empresaId);
+    const resposta = respostaInformada.trim().slice(0, 255);
+    if (!aprovar && resposta.length < 3) {
+      throw new AppError(422, "VALIDACAO", "Diga ao colaborador por que o pedido foi recusado.", { resposta: "Diga ao colaborador por que o pedido foi recusado." });
+    }
+    const client = await this.db.connect();
+    try {
+      await client.query("begin");
+      const pedido = (await client.query<{ id_colaborador: string; data: string; entrada: string; saida: string | null; aceite: number | null }>(`
+        select i.id_colaborador, i.data, i.entrada, i.saida, i.aceite
+        from dna_work.ponto_inclusao i
+        join dna_work.colaborador col on col.id_colaborador = i.id_colaborador
+        where i.id = $1 and col.id_empresa = $2
+        for update of i
+      `, [id, empresaId])).rows[0];
+      if (!pedido) throw new AppError(404, "SOLICITACAO_NAO_ENCONTRADA", "Pedido não encontrado.");
+      if (pedido.aceite !== null) throw new AppError(409, "SOLICITACAO_RESPONDIDA", "Esse pedido já foi respondido.");
+      let idPonto: number | null = null;
+      if (aprovar) {
+        await client.query("select pg_advisory_xact_lock(hashtext($1))", [`inclusao-${pedido.id_colaborador}`]);
+        // Desde o pedido pode ter entrado outra batida no mesmo horário: confere de novo (sem contar este pedido).
+        await client.query("update dna_work.ponto_inclusao set aceite = -1 where id = $1", [id]);
+        await conferirSobreposicao(client, pedido.id_colaborador, pedido.data, pedido.entrada, pedido.saida ?? pedido.entrada);
+        idPonto = (await client.query<{ id: number }>("select coalesce(max(id), 0) + 1 as id from dna_work.tabela_ponto")).rows[0].id;
+        const entrada = `${pedido.entrada}:00`;
+        const saida = pedido.saida ? `${pedido.saida}:00` : null;
+        await client.query(`
+          insert into dna_work.tabela_ponto
+            (id, id_colaborador, data, entrada, entrada_editado, saida, saida_editado, tratado_entrada, tratado_saida,
+             id_usu_tratado_entrada, id_usu_tratado_saida, horas_trabalhadas, dispositivo_entrada)
+          values ($1,$2,$3,null,$4,null,$5,1,$6,$7,$8,$9,'Inclusão aprovada pela empresa')
+        `, [
+          idPonto, pedido.id_colaborador, pedido.data, entrada, saida, saida ? 1 : null, usuarioId, saida ? usuarioId : null,
+          saida ? horasEntreRelogio(entrada, saida) : null,
+        ]);
+      }
+      await client.query(
+        "update dna_work.ponto_inclusao set aceite = $2, resposta = $3, id_ponto = $4, id_usuario = $5, respondido_em = now() where id = $1",
+        [id, aprovar ? 1 : 0, resposta || null, idPonto, usuarioId],
+      );
+      await client.query("commit");
+      return { ok: true };
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Aprova ou recusa um pedido de ajuste. Aprovado, o horário vai para entrada_editado/saida_editado e a marcação
+   * original fica guardada (Portaria 671/2021, o registro do relógio não pode ser alterado), como o sistema antigo faz.
+   */
+  async responderSolicitacao(usuarioId: string, empresaId: string, id: number, aprovar: boolean, respostaInformada: string) {
+    await this.garantir(usuarioId, empresaId);
+    const resposta = respostaInformada.trim().slice(0, 255);
+    if (!aprovar && resposta.length < 3) {
+      throw new AppError(422, "VALIDACAO", "Diga ao colaborador por que o pedido foi recusado.", { resposta: "Diga ao colaborador por que o pedido foi recusado." });
+    }
+    const client = await this.db.connect();
+    try {
+      await client.query("begin");
+      const pedido = (await client.query<{ id_ponto: number; tipo: string; hora: string | null; aceite: number | null; entrada: string | null; saida: string | null }>(`
+        select j.id_ponto, j.tipo, j.hora, j.aceite,
+               coalesce(nullif(t.entrada_editado, ''), t.entrada) as entrada, coalesce(nullif(t.saida_editado, ''), t.saida) as saida
+        from dna_work.justificativa j
+        join dna_work.tabela_ponto t on t.id = j.id_ponto
+        join dna_work.colaborador col on col.id_colaborador = t.id_colaborador
+        where j.id = $1 and col.id_empresa = $2
+        for update of j
+      `, [id, empresaId])).rows[0];
+      if (!pedido) throw new AppError(404, "SOLICITACAO_NAO_ENCONTRADA", "Pedido não encontrado.");
+      if (pedido.aceite !== null) throw new AppError(409, "SOLICITACAO_RESPONDIDA", "Esse pedido já foi respondido.");
+      if (aprovar) {
+        const hora = `${(pedido.hora ?? "").slice(0, 5)}:00`;
+        if (!/^\d{2}:\d{2}:00$/.test(hora)) throw new AppError(422, "HORA_INVALIDA", "O horário pedido não é válido.");
+        const entrada = pedido.tipo === "entrada" ? hora : pedido.entrada;
+        const saida = pedido.tipo === "saida" ? hora : pedido.saida;
+        const lado = pedido.tipo === "saida" ? "saida" : "entrada";
+        await client.query(`
+          update dna_work.tabela_ponto
+          set ${lado}_editado = $2, tratado_${lado} = 1, id_usu_tratado_${lado} = $3, horas_trabalhadas = coalesce($4, horas_trabalhadas)
+          where id = $1
+        `, [pedido.id_ponto, hora, usuarioId, entrada && saida ? horasEntreRelogio(entrada, saida) : null]);
+      }
+      await client.query("update dna_work.justificativa set aceite = $2, resposta = $3 where id = $1", [id, aprovar ? 1 : 0, resposta || null]);
+      await client.query("commit");
+      return { ok: true };
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async relatorioPonto(usuarioId: string, empresaId: string, deInformado?: string, ateInformado?: string) {
+    await this.garantir(usuarioId, empresaId);
+    const hoje = dataSp(0);
+    const diaDaSemana = (new Date(`${hoje}T12:00:00Z`).getUTCDay() + 6) % 7;
+    let de = dataValida(deInformado) ?? dataSpDe(hoje, -diaDaSemana);
+    let ate = dataValida(ateInformado) ?? hoje;
+    if (ate < de) [de, ate] = [ate, de];
+    if (intervalo(de, ate).length > 370) throw new AppError(422, "PERIODO_LONGO", "Escolha um período de até um ano.");
+    const pessoas = (await this.db.query<{ id_candidato: string; nome: string | null; cargo: string | null; departamento: string | null; jornada: string | null; ativo: boolean }>(`
+      select distinct on (col.id_candidato) col.id_candidato, c.nome, col.cargo, col.departamento, esc.nome as jornada,
+             coalesce(col.status_colaborador, 1) = 1 as ativo
+      from dna_work.colaborador col
+      join dna_work.candidato c on c.id_candidato = col.id_candidato
+      left join lateral (select escala from dna_work.carga_horaria ch where ch.id_colaborador = col.id_colaborador limit 1) ch on true
+      left join dna_work.ponto_turno_base esc on esc.id = ch.escala and esc.id_empresa = col.id_empresa
       where col.id_empresa = $1
-        and coalesce(t.excluido, 0) = 0
-        and t.data ~ '^[0-9]{4}[/-][0-9]{2}[/-][0-9]{2}$'
-      order by replace(t.data, '-', '/') desc, t.id desc
-      limit 200
-    `, [empresaId]);
-    return rows.rows;
+        and (coalesce(col.status_colaborador, 1) = 1 or replace(col.data_desligamento, '/', '-') >= $2)
+      order by col.id_candidato, case when col.status_colaborador = 1 then 0 else 1 end, col.data_cadastro desc nulls last
+    `, [empresaId, de])).rows;
+    // Poucas consultas por vez, para não esgotar as conexões com empresas grandes.
+    const linhas: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < pessoas.length; i += 6) {
+      const lote = await Promise.all(pessoas.slice(i, i + 6).map(async (pessoa) => {
+        const relatorio = await this.montarRelatorioPonto(empresaId, pessoa.id_candidato, de, ate);
+        if (relatorio.semRegistro) return null;
+        const total = relatorio.inicioContrato
+          ? (await this.montarRelatorioPonto(empresaId, pessoa.id_candidato, relatorio.inicioContrato, hoje)).periodo
+          : null;
+        return {
+          id_candidato: pessoa.id_candidato,
+          nome: pessoa.nome ?? "",
+          cargo: pessoa.cargo ?? "",
+          departamento: pessoa.departamento ?? "",
+          jornada: pessoa.jornada ?? "",
+          modalidade: relatorio.estagio ? "Estágio" : "CLT",
+          situacao: relatorio.desligado ? "Desligado" : "Ativo",
+          ...relatorio.periodo,
+          saldoTotal: total?.saldo ?? null,
+          // Estágio não pode passar da jornada (Lei 11.788/2008, art. 10): saldo positivo é alerta, não crédito.
+          estagioAcima: relatorio.estagio && relatorio.periodo.saldo > 0,
+        };
+      }));
+      linhas.push(...lote.filter((linha): linha is NonNullable<typeof linha> => Boolean(linha)));
+    }
+    linhas.sort((a, b) => String(a.nome).localeCompare(String(b.nome), "pt-BR"));
+    return { de, ate, linhas };
   }
 
   /**
@@ -988,13 +1509,27 @@ export class PortalDadosService {
    */
   async relatorioPontoColaborador(usuarioId: string, empresaId: string, idCandidato: string, de?: string, ate?: string) {
     await this.garantir(usuarioId, empresaId);
+    if (dataValida(de) && dataValida(ate) && intervalo(de!, ate!).length > 370) {
+      throw new AppError(422, "PERIODO_LONGO", "Escolha um período de até um ano.");
+    }
+    const relatorio = await this.montarRelatorioPonto(empresaId, idCandidato, de, ate);
+    // Saldo total do contrato atual: do início dele até hoje (a página mostra junto do saldo do período).
+    const total = !relatorio.semRegistro && relatorio.inicioContrato
+      ? (await this.montarRelatorioPonto(empresaId, idCandidato, relatorio.inicioContrato, dataSp(0))).periodo
+      : null;
+    return { ...relatorio, total };
+  }
+
+  private async montarRelatorioPonto(empresaId: string, idCandidato: string, de?: string, ate?: string) {
     const pessoa = await this.db.query<{
       id_colaborador: string; nome: string | null; cargo: string | null; banco_horas: string | null; modalidade: string | null; ativo: boolean;
       cpf: string | null; email: string | null; celular: string | null; departamento: string | null; data_inicio: string | null;
+      data_desligamento: string | null;
     }>(`
       select col.id_colaborador, c.nome, coalesce(nullif(btrim(col.cargo), ''), v.cargo) as cargo, col.banco_horas::text,
              coalesce(col.tipo_vaga, v.tipo_vaga)::text as modalidade, coalesce(col.status_colaborador, 1) = 1 as ativo,
-             c.cpf, c.email, c.celular, col.departamento, replace(col.data_inicio, '/', '-') as data_inicio
+             c.cpf, c.email, c.celular, col.departamento, replace(col.data_inicio, '/', '-') as data_inicio,
+             replace(col.data_desligamento, '/', '-') as data_desligamento
       from dna_work.colaborador col
       join dna_work.candidato c on c.id_candidato = col.id_candidato
       left join lateral (
@@ -1027,7 +1562,10 @@ export class PortalDadosService {
       `, [idCandidato, empresaId]);
       const linha = contrato.rows[0];
       if (!linha) throw new AppError(404, "COLABORADOR_NAO_ENCONTRADO", "Colaborador não encontrado nesta empresa.");
-      return { nome: linha.nome ?? "", cargo: linha.cargo ?? "", bancoHoras: false, semRegistro: true, estagio: false, desligado: false, de: de ?? "", ate: ate ?? "", dias: [] as never[] };
+      return {
+        nome: linha.nome ?? "", cargo: linha.cargo ?? "", bancoHoras: false, semRegistro: true, estagio: false, desligado: false,
+        inicioContrato: "", temAnterior: false, periodo: resumoDoPeriodo([]), periodoAnterior: null, de: de ?? "", ate: ate ?? "", dias: [] as never[],
+      };
     }
 
     let fim = dataValida(ate) ?? dataSp(0);
@@ -1056,26 +1594,34 @@ export class PortalDadosService {
       // A atual vale do início dela em diante, mesmo que uma anterior tenha início mais tarde por erro de cadastro.
       return inicioDe(colaborador) && dia >= inicioDe(colaborador) ? colaborador : dono;
     };
+    const hoje = dataSp(0);
+    // Dia futuro ainda não aconteceu; depois do último dia de trabalho (desligamento) a pessoa não trabalhava mais aqui.
     const dias = intervalo(inicio, fim).flatMap((dia) => {
+      if (dia > hoje) return [];
       const dono = donoDoDia(dia);
-      return dono ? [{ iso: dia, dono }] : [];
+      if (!dono) return [];
+      if (dono.data_desligamento && /^\d{4}-\d{2}-\d{2}$/.test(dono.data_desligamento) && dia > dono.data_desligamento) return [];
+      return [{ iso: dia, dono }];
     });
     const chaves = dias.map((dia) => dia.iso.replaceAll("-", "/"));
     const ids = [...new Set(dias.map((dia) => dia.dono.id_colaborador))];
-    const [banco, pontos, escala, feriados, marcados, cargas, ferias] = await Promise.all([
+    const [banco, pontos, escala, feriados, marcados, cargas, ferias, atestados] = await Promise.all([
       this.db.query<{ id: string; data: string; horas_trabalhadas: string | null; saldo_dia: string | null; saldo_bh: string | null; folga: number | null; carga_horaria: number | null }>(`
         select id_colaborador::text as id, data, horas_trabalhadas, saldo_dia, saldo_bh, folga, carga_horaria
         from dna_work.banco_horas
         where id_colaborador::text = any($1) and data = any($2::text[])
       `, [ids, chaves]),
-      this.db.query<{ id: string; data: string; entrada: string | null; saida: string | null; horas: string | null }>(`
-        select id_colaborador::text as id, data,
-               coalesce(nullif(btrim(entrada_editado), ''), entrada) as entrada,
-               coalesce(nullif(btrim(saida_editado), ''), saida) as saida,
-               horas_trabalhadas as horas
-        from dna_work.tabela_ponto
-        where id_colaborador::text = any($1) and data = any($2::text[]) and coalesce(excluido, 0) = 0
-        order by data, id
+      // Ordem das batidas do dia pelo horário de entrada (uma marcação incluída depois tem id maior, mas pode ser de
+      // manhã). Cuidado: "id" aqui é o apelido do colaborador.
+      this.db.query<{ id: string; data: string; entrada: string | null; saida: string | null; horas: string | null; ajustada: boolean }>(`
+        select t.id_colaborador::text as id, t.data,
+               coalesce(nullif(btrim(t.entrada_editado), ''), t.entrada) as entrada,
+               coalesce(nullif(btrim(t.saida_editado), ''), t.saida) as saida,
+               t.horas_trabalhadas as horas,
+               (coalesce(t.tratado_entrada, 0) = 1 or coalesce(t.tratado_saida, 0) = 1) as ajustada
+        from dna_work.tabela_ponto t
+        where t.id_colaborador::text = any($1) and t.data = any($2::text[]) and coalesce(t.excluido, 0) = 0
+        order by t.data, coalesce(nullif(btrim(t.entrada_editado), ''), t.entrada), t.id
       `, [ids, chaves]),
       this.db.query<Record<string, string | null>>(`
         select distinct on (id_colaborador) id_colaborador::text as id,
@@ -1089,17 +1635,23 @@ export class PortalDadosService {
         from dna_work.ponto_data_trabalho
         where id_colaborador::text = any($1) and replace(data, '-', '/') = any($2::text[])
       `, [ids, chaves]),
-      this.db.query<{ id: number; entrada: string | null; saida_refeicao: string | null; retorno_refeicao: string | null; saida: string | null }>(`
-        select id, entrada, saida_refeicao, retorno_refeicao, saida from dna_work.ponto_carga_base where id_empresa = $1
+      this.db.query<CargaBase>(`
+        select id, entrada, saida_refeicao, retorno_refeicao, saida, tolerancia, pausa from dna_work.ponto_carga_base where id_empresa = $1
       `, [empresaId]),
       this.db.query<{ id: string; inicio: string; fim: string }>(
         "select id_colaborador::text as id, replace(inicio, '-', '/') as inicio, replace(fim, '-', '/') as fim from dna_work.ferias where id_colaborador::text = any($1)",
         [ids],
       ),
+      // Atestado do dia inteiro: dia justificado, não é falta nem conta carga.
+      this.db.query<{ id: string; data: string }>(
+        "select id_colaborador::text as id, replace(data, '-', '/') as data from dna_work.atestado_medico where id_colaborador::text = any($1) and replace(data, '-', '/') = any($2::text[]) and dia_completo::text = '1'",
+        [ids, chaves],
+      ),
     ]);
+    const comAtestado = new Set(atestados.rows.map((linha) => `${linha.id}|${linha.data}`));
     const chave2 = (id: string, data: string) => `${id}|${data}`;
     const porBanco = new Map(banco.rows.map((linha) => [chave2(linha.id, linha.data), linha]));
-    const porPonto = new Map<string, Array<{ entrada: string | null; saida: string | null; horas: string | null }>>();
+    const porPonto = new Map<string, Array<{ entrada: string | null; saida: string | null; horas: string | null; ajustada: boolean }>>();
     for (const ponto of pontos.rows) {
       const lista = porPonto.get(chave2(ponto.id, ponto.data)) ?? [];
       lista.push(ponto);
@@ -1131,18 +1683,36 @@ export class PortalDadosService {
       const idCarga = marca?.id_carga_horaria || (trabalha ? semana?.[`${campo}_carga`] : null) || (hora?.carga_horaria ? String(hora.carga_horaria) : null);
       const carga = idCarga && idCarga !== "0" ? porCarga.get(idCarga) : undefined;
       const deFerias = emFerias(id, chave);
-      const minutosCarga = deFerias || feriado.has(chave) || !trabalha ? 0 : minutosDaCarga(carga);
-      const minutosFeitos = minutosTrabalhados(batidas, hora?.horas_trabalhadas);
+      const atestado = comAtestado.has(`${id}|${chave}`);
+      const minutosCarga = deFerias || atestado || feriado.has(chave) || !trabalha ? 0 : minutosDaCarga(carga);
+      const segundosFeitos = segundosTrabalhados(batidas, hora?.horas_trabalhadas);
+      const segundosCarga = minutosCarga * 60;
+      // O dia aparece arredondado para o minuto mais perto; as somas usam os segundos.
+      const minutosFeitos = paraMinutos(segundosFeitos);
       const primeira = batidas[0];
       const segundaBatida = batidas[1];
+      // Hoje, com o dia ainda aberto (sem batida ou com uma saída pendente), não dá para dizer falta nem saldo.
+      const emAndamento = iso === hoje && (!batidas.length || !batidas[batidas.length - 1].saida);
       let situacao = "";
       if (!primeira?.entrada) {
         if (deFerias) situacao = dono.modalidade === "1" ? "Recesso" : "Férias";
+        else if (atestado) situacao = "Atestado";
         else if (feriado.has(chave)) situacao = "Feriado";
         else if (!trabalha || hora?.folga === 1) situacao = "Folga";
+        else if (emAndamento) situacao = "Hoje";
         else situacao = dono.banco_horas === "1" ? "Banco de Horas" : "Faltou";
       }
-      const saldo = hora?.saldo_dia ? saldoGravado(hora.saldo_dia) : { texto: relogio(Math.abs(minutosCarga - minutosFeitos)), negativo: minutosFeitos < minutosCarga };
+      // Saldo gravado pelo sistema antigo vale como está; sem ele, calcula aqui, já com a tolerância da CLT.
+      const gravado = !emAndamento && hora?.saldo_dia ? saldoGravado(hora.saldo_dia) : null;
+      const saldoSegundos = emAndamento
+        ? 0
+        : gravado
+        ? (gravado.negativo ? -1 : 1) * (segundosRelogio(gravado.texto) ?? 0)
+        : minutosCarga && dentroDaTolerancia(batidas, carga)
+          ? 0
+          : segundosFeitos - segundosCarga;
+      const saldoDoDia = paraMinutos(saldoSegundos);
+      const saldo = gravado ?? { texto: relogio(Math.abs(saldoDoDia)), negativo: saldoDoDia < 0 };
       return {
         data: `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`,
         dia: nomes[indice],
@@ -1159,10 +1729,26 @@ export class PortalDadosService {
         saldoNegativo: saldo.negativo && saldo.texto !== "00:00:00",
         banco: hora?.saldo_bh ?? "",
         bancoNegativo: Boolean(hora?.saldo_bh?.startsWith("-")),
+        // Números para somar o período (dia em andamento ainda não entra).
+        minutosFeitos: emAndamento ? 0 : minutosFeitos,
+        minutosCarga: emAndamento ? 0 : minutosCarga,
+        saldoMinutos: saldoDoDia,
+        segundosFeitos: emAndamento ? 0 : segundosFeitos,
+        segundosCarga: emAndamento ? 0 : segundosCarga,
+        saldoSegundos,
+        // Entrada sem saída num dia que já acabou: marcação incompleta, o saldo do dia sai errado.
+        incompleta: !emAndamento && batidas.some((batida) => batida.entrada && !batida.saida),
+        // Algum horário do dia foi corrigido ou incluído por pedido aprovado (o espelho precisa identificar isso).
+        ajustado: batidas.some((batida) => batida.ajustada),
+        falta: situacao === "Faltou",
+        atestado,
       };
     });
     return {
       nome: colaborador.nome ?? "",
+      // Somas do período: o contrato atual e, se o filtro pegou dias de uma contratação anterior, ela à parte.
+      periodo: resumoDoPeriodo(linhas.filter((linha) => !linha.anterior)),
+      periodoAnterior: linhas.some((linha) => linha.anterior) ? resumoDoPeriodo(linhas.filter((linha) => linha.anterior)) : null,
       cargo: colaborador.cargo ?? "",
       bancoHoras: usaBanco,
       semRegistro: false,
@@ -1297,7 +1883,7 @@ export class PortalDadosService {
         insert into dna_work.usuario_empresa
           (id_u, nome_u, email_u, senha_u, senha_hash, telefone_u, empresa_u, status, tipo, data_senha, atualiza_senha)
         values ($1,$2,$3,$4,$5,$6,$7,1,1,to_char(current_date,'YYYY/MM/DD'),0)
-      `, [id, nome, email, crypto.createHash("md5").update(senha).digest("hex"), await hash(senha), telefone, empresaId]);
+      `, [id, nome, email, null, await hash(senha), telefone, empresaId]); // senha_u (MD5 antigo) não é mais gravado
       await client.query(`insert into dna_work.vinculo_empresa_usuario (id_usuario, id_empresa) values ($1,$2)`, [id, empresaId]);
       await client.query("COMMIT");
     } catch (error) {

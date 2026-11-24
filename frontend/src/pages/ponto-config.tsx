@@ -1,14 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, Plane, RotateCcw, Trash2 } from "lucide-react";
+import { CalendarDays, KeyRound, Plane, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ApiError, api } from "../lib/api";
 import { dataBr } from "../lib/formato";
 import { Janela } from "../components/janela";
 import { Alerta, Badge, Button, Card, Field, Input, Select } from "../components/ui";
+import { useJornadas } from "./jornadas";
 
-type Configuracao = { noPonto: boolean; escala: string; carga: string; ferias: Array<{ id: number; inicio: string; fim: string }> };
-type Opcao = { id: number; nome: string };
+type Configuracao = { noPonto: boolean; jornada: string; ferias: Array<{ id: number; inicio: string; fim: string }> };
 
 const chaveConfig = (id: string) => ["ponto-config", id];
 const mensagem = (erro: unknown, padrao: string) => (erro instanceof ApiError ? erro.message : padrao);
@@ -38,8 +38,11 @@ export function ApagarColaborador({ id, nome, desligado, aoReativar }: { id: str
   const client = useQueryClient();
   const navigate = useNavigate();
   const [aberta, setAberta] = useState(false);
+  const hoje = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
+  // Último dia em que a pessoa trabalhou: depois dele o relatório não conta falta.
+  const [ultimoDia, setUltimoDia] = useState(hoje);
   const alterar = useMutation({
-    mutationFn: () => api(`/api/v1/empresa/ponto/colaborador/${encodeURIComponent(id)}/desligar`, { method: "POST" }),
+    mutationFn: () => api(`/api/v1/empresa/ponto/colaborador/${encodeURIComponent(id)}/desligar`, { method: "POST", body: JSON.stringify({ ultimoDia }) }),
     onSuccess: async () => {
       setAberta(false);
       await Promise.all([
@@ -69,6 +72,10 @@ export function ApagarColaborador({ id, nome, desligado, aoReativar }: { id: str
           <p className="text-sm text-slate-600">
             A pessoa sai da lista de colaboradores e não consegue mais bater ponto.
           </p>
+          <Field label="Último dia de trabalho" erro={alterar.error instanceof ApiError ? alterar.error.campos?.ultimoDia : undefined}>
+            <Input type="date" value={ultimoDia} max={hoje} required onChange={(event) => setUltimoDia(event.target.value)} />
+            <span className="text-xs text-slate-500">Depois desse dia o relatório não conta falta.</span>
+          </Field>
           <Alerta tom="info">
             As batidas, o banco de horas, as férias e os atestados ficam guardados, porque a lei obriga a empresa a manter os
             registros de ponto. Se precisar do espelho de ponto dela, ela fica no filtro <strong>Desligados</strong>.
@@ -84,7 +91,49 @@ export function ApagarColaborador({ id, nome, desligado, aoReativar }: { id: str
   );
 }
 
-/** Blocos de jornada (escala + carga horária) e férias (recesso, para estagiário) da pessoa, acima do relatório. */
+/**
+ * Nova senha provisória do app do ponto: para quem esqueceu a senha ou ainda não tinha uma.
+ * A pessoa entra com ela e é obrigada a criar a própria senha.
+ */
+export function RedefinirSenha({ id, nome }: { id: string; nome: string }) {
+  const [aberta, setAberta] = useState(false);
+  const [senha, setSenha] = useState("");
+  const salvar = useMutation({
+    mutationFn: () => api(`/api/v1/empresa/ponto/colaborador/${encodeURIComponent(id)}/senha`, { method: "POST", body: JSON.stringify({ senha }) }),
+    onSuccess: () => setSenha(""),
+  });
+  const fechar = () => { if (!salvar.isPending) { setAberta(false); setSenha(""); salvar.reset(); } };
+  return (
+    <>
+      <Button variant="secondary" onClick={() => { salvar.reset(); setAberta(true); }}>
+        <KeyRound size={16} aria-hidden /> Senha do ponto
+      </Button>
+      <Janela titulo={`Nova senha para ${nome}`} aberta={aberta} onFechar={fechar}>
+        {salvar.isSuccess ? (
+          <div className="grid gap-4">
+            <Alerta tom="ok">Senha provisória salva. Passe para a pessoa: ela entra no app com o CPF e essa senha e cria a dela.</Alerta>
+            <div className="flex justify-end"><Button onClick={fechar}>Fechar</Button></div>
+          </div>
+        ) : (
+          <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); salvar.mutate(); }}>
+            <p className="text-sm text-slate-600">Use quando a pessoa esqueceu a senha ou ainda não tem acesso ao app do ponto. A senha atual deixa de valer.</p>
+            <Field label="Senha provisória" erro={salvar.error instanceof ApiError ? salvar.error.campos?.senha : undefined}>
+              <Input type="password" autoComplete="new-password" minLength={6} required value={senha} onChange={(event) => setSenha(event.target.value)} />
+              <span className="text-xs text-slate-500">Pelo menos 6 caracteres. No primeiro login a pessoa troca por uma dela.</span>
+            </Field>
+            {salvar.error && !(salvar.error instanceof ApiError && salvar.error.campos?.senha) ? <Alerta>{mensagem(salvar.error, "Não foi possível salvar a senha.")}</Alerta> : null}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={fechar}>Voltar</Button>
+              <Button type="submit" disabled={salvar.isPending}>{salvar.isPending ? "Salvando…" : "Salvar senha"}</Button>
+            </div>
+          </form>
+        )}
+      </Janela>
+    </>
+  );
+}
+
+/** Blocos de jornada de trabalho e férias (recesso, para estagiário) da pessoa, acima do relatório. */
 export function ConfiguracaoPonto({ id, estagio, desligado }: { id: string; estagio: boolean; desligado: boolean }) {
   const config = useConfiguracao(id);
   // Desligado: só o relatório (somente leitura), para a empresa tirar o espelho de ponto.
@@ -93,65 +142,63 @@ export function ConfiguracaoPonto({ id, estagio, desligado }: { id: string; esta
   if (!config.data) return null;
   return (
     <div className="grid gap-5 lg:grid-cols-2">
-      <Jornada id={id} atual={config.data.data} />
+      <Jornada id={id} atual={config.data.data} estagio={estagio} />
       <Ferias id={id} periodos={config.data.data.ferias} estagio={estagio} />
     </div>
   );
 }
 
-function Jornada({ id, atual }: { id: string; atual: Configuracao }) {
-  const escalas = useQuery({ queryKey: ["/api/v1/empresa/escalas"], queryFn: () => api<Opcao[]>("/api/v1/empresa/escalas") });
-  const cargas = useQuery({ queryKey: ["/api/v1/empresa/cargas"], queryFn: () => api<Opcao[]>("/api/v1/empresa/cargas") });
+function Jornada({ id, atual, estagio }: { id: string; atual: Configuracao; estagio: boolean }) {
+  const jornadas = useJornadas();
   const recarregar = useRecarregar(id);
-  const [escala, setEscala] = useState(atual.escala);
-  const [carga, setCarga] = useState(atual.carga);
+  const [jornada, setJornada] = useState(atual.jornada);
   const [salvo, setSalvo] = useState(false);
-  useEffect(() => { setEscala(atual.escala); setCarga(atual.carga); }, [atual.escala, atual.carga]);
+  useEffect(() => { setJornada(atual.jornada); }, [atual.jornada]);
   const salvar = useMutation({
-    mutationFn: () => api(`/api/v1/empresa/ponto/colaborador/${encodeURIComponent(id)}/jornada`, { method: "POST", body: JSON.stringify({ escala, carga }) }),
+    mutationFn: () => api(`/api/v1/empresa/ponto/colaborador/${encodeURIComponent(id)}/jornada`, { method: "POST", body: JSON.stringify({ jornada }) }),
     onSuccess: async () => {
       setSalvo(true);
       await recarregar();
     },
   });
-  const listaEscalas = escalas.data?.data ?? [];
-  const listaCargas = cargas.data?.data ?? [];
+  // Jornadas da modalidade da pessoa (estágio ou CLT) e as antigas, sem modalidade; a atual aparece sempre.
+  const lista = (jornadas.data?.data ?? []).filter((item) => !item.modalidade || item.modalidade === (estagio ? "1" : "2") || String(item.id) === atual.jornada);
+  const escolhida = lista.find((item) => String(item.id) === jornada);
   const campos = salvar.error instanceof ApiError ? salvar.error.campos ?? {} : {};
-  const semCadastro = !escalas.isLoading && !cargas.isLoading && (!listaEscalas.length || !listaCargas.length);
-  const mudou = escala !== atual.escala || carga !== atual.carga;
+  const mudou = jornada !== atual.jornada;
   return (
     <Card className="grid content-start gap-4 md:p-5">
       <div className="flex items-start gap-3">
         <span className="rounded-lg bg-violet-50 p-2 text-violet-700"><CalendarDays size={18} /></span>
         <div>
-          <h2 className="text-sm font-extrabold text-ink">Jornada</h2>
-          <p className="text-xs text-slate-500">A escala diz os dias de trabalho; a carga horária, o horário. Sem jornada, todo dia aparece como folga.</p>
+          <h2 className="text-sm font-extrabold text-ink">Jornada de trabalho</h2>
+          <p className="text-xs text-slate-500">Os dias e o horário de trabalho da pessoa. Sem jornada, todo dia aparece como folga.</p>
         </div>
       </div>
-      {semCadastro ? (
-        <Alerta>
-          Cadastre antes {!listaEscalas.length ? <Link className="font-bold underline" to="/escalas?novo=1">uma escala</Link> : null}
-          {!listaEscalas.length && !listaCargas.length ? " e " : null}
-          {!listaCargas.length ? <Link className="font-bold underline" to="/cargas?novo=1">uma carga horária</Link> : null}.
-        </Alerta>
+      {!jornadas.isLoading && !lista.length ? (
+        <Alerta>Cadastre antes <Link className="font-bold underline" to="/jornadas?novo=1">uma jornada de trabalho</Link>.</Alerta>
       ) : null}
-      <form className="grid gap-3 sm:grid-cols-2" onSubmit={(event) => { event.preventDefault(); setSalvo(false); salvar.mutate(); }}>
-        <Field label="Escala" erro={campos.escala}>
-          <Select aria-label="Escala" value={escala} onChange={(event) => { setSalvo(false); setEscala(event.target.value); }}>
+      <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); setSalvo(false); salvar.mutate(); }}>
+        <Field label="Jornada" erro={campos.jornada}>
+          <Select aria-label="Jornada" value={jornada} onChange={(event) => { setSalvo(false); setJornada(event.target.value); }}>
             <option value="">Selecione</option>
-            {listaEscalas.map((item) => <option key={item.id} value={String(item.id)}>{item.nome}</option>)}
+            {lista.map((item) => (
+              <option key={item.id} value={String(item.id)} disabled={!item.completa}>
+                {item.nome}{item.completa ? "" : " (sem horário em algum dia)"}
+              </option>
+            ))}
           </Select>
         </Field>
-        <Field label="Carga horária" erro={campos.carga}>
-          <Select aria-label="Carga horária" value={carga} onChange={(event) => { setSalvo(false); setCarga(event.target.value); }}>
-            <option value="">Selecione</option>
-            {listaCargas.map((item) => <option key={item.id} value={String(item.id)}>{item.nome}</option>)}
-          </Select>
-        </Field>
-        <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
-          <Button type="submit" disabled={salvar.isPending || !mudou}>{salvar.isPending ? "Salvando…" : "Salvar jornada"}</Button>
+        {escolhida ? (
+          <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm tabular-nums text-slate-600">
+            {escolhida.resumo || "Nenhum dia de trabalho"}
+            {escolhida.completa ? null : <> · <Link className="font-semibold text-violet-700 underline" to="/jornadas">complete o horário</Link></>}
+          </p>
+        ) : null}
+        <div className="flex flex-wrap items-center gap-3">
+          <Button type="submit" disabled={salvar.isPending || !mudou || !jornada}>{salvar.isPending ? "Salvando…" : "Salvar jornada"}</Button>
           {salvo && !mudou ? <span className="text-sm font-semibold text-emerald-700" role="status">Jornada salva.</span> : null}
-          {salvar.error && !salvar.error.message.includes("Escolha") ? <span className="text-sm font-semibold text-red-700" role="alert">{mensagem(salvar.error, "Não foi possível salvar.")}</span> : null}
+          {salvar.error && !campos.jornada ? <span className="text-sm font-semibold text-red-700" role="alert">{mensagem(salvar.error, "Não foi possível salvar.")}</span> : null}
         </div>
       </form>
     </Card>
