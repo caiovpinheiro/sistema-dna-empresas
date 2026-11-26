@@ -326,3 +326,11 @@ button, a {
   outline: 2px solid #7c3aed;
   outline-offset: 2px;
 }
+
+/* Menu lateral: continua rolando (roda do mouse, toque, teclado), mas sem a barra de rolagem por cima dos itens. */
+.menu-sem-barra {
+  scrollbar-width: none;
+}
+.menu-sem-barra::-webkit-scrollbar {
+  display: none;
+}

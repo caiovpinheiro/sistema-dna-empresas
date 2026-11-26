@@ -6,7 +6,12 @@ import { Janela, useCadastroNaUrl } from "../components/janela";
 import { Alerta, Badge, Button, CabecalhoPagina, Card, Empty, Field, Input, Select, Skeleton, cn } from "../components/ui";
 
 /** Horário de um dia de trabalho. Sem pausa, saída e retorno da refeição ficam vazios. */
-export type Horario = { entrada: string; saida: string; pausa: boolean; saidaRefeicao: string; retornoRefeicao: string; tolerancia?: string };
+export type Horario = {
+  entrada: string; saida: string; pausa: boolean;
+  /** Almoço livre: a pessoa escolhe a hora; só a duração (HH:MM) é fixa. */
+  refeicaoLivre: boolean; duracaoRefeicao: string;
+  saidaRefeicao: string; retornoRefeicao: string; tolerancia?: string;
+};
 export type Jornada = {
   id: number;
   nome: string;
@@ -32,8 +37,8 @@ type DiaForm = Horario & { trabalha: boolean };
 
 /** Horário padrão de cada modalidade: CLT 8h com 1h de almoço (40h na semana); estágio 6h corridas (30h na semana). */
 const PADRAO: Record<string, DiaForm> = {
-  "2": { trabalha: true, entrada: "08:00", saida: "17:00", pausa: true, saidaRefeicao: "12:00", retornoRefeicao: "13:00" },
-  "1": { trabalha: true, entrada: "08:00", saida: "14:00", pausa: false, saidaRefeicao: "", retornoRefeicao: "" },
+  "2": { trabalha: true, entrada: "08:00", saida: "17:00", pausa: true, refeicaoLivre: false, duracaoRefeicao: "01:00", saidaRefeicao: "12:00", retornoRefeicao: "13:00" },
+  "1": { trabalha: true, entrada: "08:00", saida: "14:00", pausa: false, refeicaoLivre: false, duracaoRefeicao: "01:00", saidaRefeicao: "", retornoRefeicao: "" },
 };
 
 export const MODALIDADES = [{ valor: "2", rotulo: "CLT" }, { valor: "1", rotulo: "Estágio" }];
@@ -45,7 +50,15 @@ function estadoInicial(modalidade: string, jornada?: Jornada): Record<Dia, DiaFo
     const dia = jornada?.dias.find((item) => item.dia === chave);
     if (!jornada) return [chave, { ...padrao, trabalha: chave !== "sabado" && chave !== "domingo" }];
     // Dia de folga (ou escala antiga sem horário) abre com o horário padrão, para só marcar "trabalha" se quiser.
-    return [chave, { ...padrao, ...(dia?.horario ?? {}), trabalha: Boolean(dia?.trabalha) }];
+    const horario = dia?.horario;
+    return [chave, {
+      ...padrao, ...(horario ?? {}),
+      // Campos vazios (almoço livre não tem hora certa) voltam ao padrão, para o caso de trocar de opção.
+      saidaRefeicao: horario?.saidaRefeicao || padrao.saidaRefeicao,
+      retornoRefeicao: horario?.retornoRefeicao || padrao.retornoRefeicao,
+      duracaoRefeicao: horario?.duracaoRefeicao || padrao.duracaoRefeicao,
+      trabalha: Boolean(dia?.trabalha),
+    }];
   })) as Record<Dia, DiaForm>;
 }
 
@@ -69,9 +82,16 @@ function regrasDaLei(modalidade: string, dias: Record<Dia, DiaForm>) {
   for (const [chave, rotulo] of DIAS) {
     const dia = dias[chave];
     if (!dia.trabalha || !dia.entrada || !dia.saida) continue;
-    const intervalo = dia.pausa && dia.saidaRefeicao && dia.retornoRefeicao ? entre(dia.saidaRefeicao, dia.retornoRefeicao) : 0;
+    const intervalo = !dia.pausa ? 0
+      : dia.refeicaoLivre ? (dia.duracaoRefeicao ? minutos(dia.duracaoRefeicao) : 0)
+      : dia.saidaRefeicao && dia.retornoRefeicao ? entre(dia.saidaRefeicao, dia.retornoRefeicao) : 0;
+    if (dia.pausa && intervalo >= entre(dia.entrada, dia.saida)) {
+      erros.push(`${rotulo}: a refeição não pode ser maior que o expediente.`);
+      continue;
+    }
     const trabalhado = entre(dia.entrada, dia.saida) - intervalo;
     semana += trabalhado;
+    if (intervalo > 120) avisos.push(`${rotulo}: intervalo de refeição acima de 2 horas só vale com acordo escrito ou convenção coletiva (CLT, art. 71).`);
     if (modalidade === "1") {
       if (trabalhado > 360) erros.push(`${rotulo}: ${horas(trabalhado)} de trabalho. Estágio pode ter no máximo 6 horas por dia (Lei 11.788/2008, art. 10).`);
       continue;
@@ -193,6 +213,8 @@ export function JornadaForm({ jornada, aoFechar }: { jornada?: Jornada; aoFechar
         corpo[`${chave}_entrada`] = dia.entrada;
         corpo[`${chave}_saida`] = dia.saida;
         corpo[`${chave}_pausa`] = dia.pausa ? "1" : "0";
+        corpo[`${chave}_refeicao_livre`] = dia.refeicaoLivre ? "1" : "0";
+        corpo[`${chave}_duracao_refeicao`] = dia.duracaoRefeicao;
         corpo[`${chave}_saida_refeicao`] = dia.saidaRefeicao;
         corpo[`${chave}_retorno_refeicao`] = dia.retornoRefeicao;
       }
@@ -244,7 +266,7 @@ export function JornadaForm({ jornada, aoFechar }: { jornada?: Jornada; aoFechar
                   {rotulo}
                 </label>
                 {dia.trabalha ? (
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-[repeat(2,minmax(0,1fr))_auto_repeat(2,minmax(0,1fr))] sm:items-end">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-[repeat(2,minmax(0,1fr))_auto_7rem_repeat(2,minmax(0,1fr))] sm:items-end">
                     <Field label="Entrada"><Input type="time" aria-label={`Entrada de ${rotulo}`} className={comErro(`${chave}_entrada`)} value={dia.entrada} onChange={(event) => mudar(chave, { entrada: event.target.value })} /></Field>
                     <Field label="Saída"><Input type="time" aria-label={`Saída de ${rotulo}`} className={comErro(`${chave}_saida`)} value={dia.saida} onChange={(event) => mudar(chave, { saida: event.target.value })} /></Field>
                     <label className="col-span-2 flex h-10 items-center gap-2 whitespace-nowrap text-sm text-slate-700 sm:col-span-1">
@@ -253,8 +275,20 @@ export function JornadaForm({ jornada, aoFechar }: { jornada?: Jornada; aoFechar
                     </label>
                     {dia.pausa ? (
                       <>
-                        <Field label="Sai para refeição"><Input type="time" aria-label={`Saída para refeição de ${rotulo}`} className={comErro(`${chave}_saida_refeicao`)} value={dia.saidaRefeicao} onChange={(event) => mudar(chave, { saidaRefeicao: event.target.value })} /></Field>
-                        <Field label="Volta da refeição"><Input type="time" aria-label={`Volta da refeição de ${rotulo}`} className={comErro(`${chave}_retorno_refeicao`)} value={dia.retornoRefeicao} onChange={(event) => mudar(chave, { retornoRefeicao: event.target.value })} /></Field>
+                        <Field label="Horário da refeição">
+                          <Select aria-label={`Horário da refeição de ${rotulo}`} value={dia.refeicaoLivre ? "livre" : "fixo"} onChange={(event) => mudar(chave, { refeicaoLivre: event.target.value === "livre" })}>
+                            <option value="fixo">Fixo</option>
+                            <option value="livre">Livre</option>
+                          </Select>
+                        </Field>
+                        {dia.refeicaoLivre ? (
+                          <Field label="Tempo de refeição" erro={campos[`${chave}_duracao_refeicao`]}><Input type="time" required aria-label={`Tempo de refeição de ${rotulo}`} className={comErro(`${chave}_duracao_refeicao`)} value={dia.duracaoRefeicao} onChange={(event) => mudar(chave, { duracaoRefeicao: event.target.value })} /></Field>
+                        ) : (
+                          <>
+                            <Field label="Sai para refeição"><Input type="time" aria-label={`Saída para refeição de ${rotulo}`} className={comErro(`${chave}_saida_refeicao`)} value={dia.saidaRefeicao} onChange={(event) => mudar(chave, { saidaRefeicao: event.target.value })} /></Field>
+                            <Field label="Volta da refeição"><Input type="time" aria-label={`Volta da refeição de ${rotulo}`} className={comErro(`${chave}_retorno_refeicao`)} value={dia.retornoRefeicao} onChange={(event) => mudar(chave, { retornoRefeicao: event.target.value })} /></Field>
+                          </>
+                        )}
                       </>
                     ) : null}
                   </div>

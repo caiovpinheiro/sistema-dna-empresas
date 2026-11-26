@@ -25,7 +25,7 @@ export function Saldo({ minutos, className = "" }: { minutos: number | null | un
 type LinhaRelatorio = {
   id_candidato: string; nome: string; cargo: string; departamento: string; jornada: string; modalidade: string; situacao: string;
   feitos: number; previstos: number; saldo: number; saldoTotal: number | null;
-  diasTrabalhados: number; faltas: number; incompletas: number; atestados: number; estagioAcima: boolean;
+  diasTrabalhados: number; faltas: number; incompletas: number; atestados: number; almocoPerto: number; estagioAcima: boolean;
 };
 type Relatorio = { de: string; ate: string; linhas: LinhaRelatorio[] };
 
@@ -174,6 +174,7 @@ function Ocorrencias({ linha }: { linha: LinhaRelatorio }) {
   if (linha.faltas) itens.push(["vencida", linha.faltas === 1 ? "1 falta" : `${linha.faltas} faltas`]);
   if (linha.incompletas) itens.push(["pendente", linha.incompletas === 1 ? "1 batida incompleta" : `${linha.incompletas} batidas incompletas`]);
   if (linha.atestados) itens.push(["Ativo", linha.atestados === 1 ? "1 atestado" : `${linha.atestados} atestados`]);
+  if (linha.almocoPerto) itens.push(["almoco", linha.almocoPerto === 1 ? "1 almoço perto da entrada ou saída" : `${linha.almocoPerto} almoços perto da entrada ou saída`]);
   if (linha.estagioAcima) itens.push(["pendente", "Estágio acima da jornada"]);
   if (!itens.length) return <span className="text-sm text-slate-400">—</span>;
   return <div className="flex flex-wrap gap-1">{itens.map(([valor, texto]) => <Badge key={texto} value={valor}>{texto}</Badge>)}</div>;

@@ -6,6 +6,7 @@ import { ArrowLeft, Plus, Search, Trash2 } from "lucide-react";
 import { Link as RouterLink, useNavigate, useSearchParams } from "react-router-dom";
 import { Saldo, horasMin } from "./relatorio-ponto";
 import { ApiError, api } from "../lib/api";
+import { useAcesso } from "../lib/acesso";
 import { dataBr } from "../lib/formato";
 import { Alerta, Badge, Button, CabecalhoPagina, Card, Empty, Field, Input, Resumo, Select, Skeleton, botao, cn } from "../components/ui";
 import { CampoBusca, Consulta, TabelaLinhas } from "./consultas";
@@ -166,17 +167,20 @@ export function FeriadoNovo({ aoFechar }: { aoFechar?: () => void } = {}) {
 
 export { RelatorioPonto } from "./relatorio-ponto";
 
-type ResumoPeriodo = { feitos: number; previstos: number; saldo: number; diasTrabalhados: number; faltas: number; incompletas: number; atestados: number };
-type DiaPonto = { data: string; dia: string; anterior?: boolean; incompleta?: boolean; ajustado?: boolean; situacao: string; entrada1: string; saida1: string; entrada2: string; saida2: string; total: string; carga: string; saldo: string; saldoNegativo: boolean; banco: string; bancoNegativo: boolean };
+type ResumoPeriodo = { feitos: number; previstos: number; saldo: number; diasTrabalhados: number; faltas: number; incompletas: number; atestados: number; almocoPerto?: number };
+type DiaPonto = { data: string; dia: string; anterior?: boolean; incompleta?: boolean; ajustado?: boolean; alertaAlmoco?: string; situacao: string; entrada1: string; saida1: string; entrada2: string; saida2: string; total: string; carga: string; saldo: string; saldoNegativo: boolean; banco: string; bancoNegativo: boolean };
 type RelatorioPessoa = {
   nome: string; cargo: string; bancoHoras: boolean; semRegistro?: boolean; estagio?: boolean; desligado?: boolean;
   inicioContrato?: string; temAnterior?: boolean; cadastro?: Record<string, string>;
   periodo?: ResumoPeriodo; periodoAnterior?: ResumoPeriodo | null; total?: ResumoPeriodo | null;
   de?: string; ate?: string; dias: DiaPonto[];
+  /** Usuário com acesso limitado que pode cadastrar mas não ver o ponto desta pessoa. */
+  semPermissaoVer?: boolean;
 };
 
 export function ColaboradoresPonto() {
   const [janela, abrirJanela, fecharJanela] = useCadastroNaUrl();
+  const { pode } = useAcesso();
   return (
     <>
       <Consulta
@@ -187,7 +191,7 @@ export function ColaboradoresPonto() {
         rotuloInativos="Desligados"
         singular="colaborador"
         plural="colaboradores"
-        acoes={<Button onClick={abrirJanela}><Plus size={16} /> Cadastrar colaborador</Button>}
+        acoes={pode("cadastro") ? <Button onClick={abrirJanela}><Plus size={16} /> Cadastrar colaborador</Button> : null}
         linkNome={(linha) => linha.id_candidato ? `/ponto/colaborador/${linha.id_candidato}` : null}
         colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "datainicio", titulo: "Início" }, { chave: "cargo", titulo: "Cargo" }, { chave: "modalidade", titulo: "Modalidade" }, { chave: "jornada", titulo: "Jornada" }, { chave: "situacao", titulo: "Situação" }]}
       />
@@ -205,6 +209,7 @@ export function RelatorioPontoColaborador({ id }: { id: string }) {
   const [ate, setAte] = useState(parametros.get("ate") ?? "");
   const [periodo, setPeriodo] = useState<{ de?: string; ate?: string }>(parametros.get("de") ? { de: parametros.get("de")!, ate: parametros.get("ate") ?? undefined } : {});
   const [reativando, setReativando] = useState(false);
+  const { pode } = useAcesso();
   const relatorio = useQuery({
     queryKey: ["ponto-colaborador", id, periodo.de ?? "", periodo.ate ?? ""],
     queryFn: () => api<RelatorioPessoa>(`/api/v1/empresa/ponto/colaborador/${id}?de=${periodo.de ?? ""}&ate=${periodo.ate ?? ""}`),
@@ -221,17 +226,18 @@ export function RelatorioPontoColaborador({ id }: { id: string }) {
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-5">
       <RouterLink to="/ponto/colaboradores" className="inline-flex w-fit items-center gap-1 text-sm font-semibold text-slate-500 hover:text-ink"><ArrowLeft size={16} /> Colaboradores</RouterLink>
-      <CabecalhoPagina titulo={pessoa?.nome || "Relatório de ponto"} descricao={[pessoa?.cargo, pessoa?.bancoHoras ? "Com banco de horas" : null].filter(Boolean).join(" · ") || "Batidas, saldo do dia e banco de horas."} acoes={pessoa && !pessoa.semRegistro ? (
+      <CabecalhoPagina titulo={pessoa?.nome || "Relatório de ponto"} descricao={[pessoa?.cargo, pessoa?.bancoHoras ? "Com banco de horas" : null].filter(Boolean).join(" · ") || "Batidas, saldo do dia e banco de horas."} acoes={pessoa && !pessoa.semRegistro && pode("cadastro") ? (
         <div className="flex flex-wrap justify-end gap-2">
           {pessoa.desligado ? null : <RedefinirSenha id={id} nome={pessoa.nome || "o colaborador"} />}
           <ApagarColaborador id={id} nome={pessoa.nome || "o colaborador"} desligado={Boolean(pessoa.desligado)} aoReativar={() => setReativando(true)} />
         </div>
       ) : null} />
-      {pessoa && !pessoa.semRegistro ? <ConfiguracaoPonto id={id} estagio={Boolean(pessoa.estagio)} desligado={Boolean(pessoa.desligado)} /> : null}
+      {pessoa && !pessoa.semRegistro && (pode("cadastro") || pode("empresa")) ? <ConfiguracaoPonto id={id} estagio={Boolean(pessoa.estagio)} desligado={Boolean(pessoa.desligado)} jornada={pode("cadastro")} ferias={pode("empresa")} /> : null}
+      {pessoa?.semPermissaoVer ? <Alerta tom="info">Você pode cadastrar e configurar esta pessoa, mas não tem permissão para ver as batidas e o saldo dela.</Alerta> : null}
       <Janela titulo={`Reativar ${pessoa?.nome ?? ""}`} descricao="A pessoa volta como se fosse nova: sem saldo nem banco de horas. Confira a modalidade e o início." aberta={reativando} onFechar={() => setReativando(false)}>
         <ColaboradorNovo reativar iniciais={{ ...(pessoa?.cadastro ?? {}), inicio: hojeIso() }} aoFechar={() => { setReativando(false); setPeriodo({}); setDe(""); setAte(""); }} />
       </Janela>
-      <Card className="grid gap-3">
+      <Card className={pessoa?.semPermissaoVer ? "hidden" : "grid gap-3"}>
         {pessoa?.temAnterior && pessoa.inicioContrato ? (
           <p className="text-sm text-slate-500">
             Contrato atual desde <strong className="text-ink">{dataBr(pessoa.inicioContrato)}</strong>. Para ver o ponto de uma contratação anterior, escolha as datas e pesquise.
@@ -268,6 +274,7 @@ export function RelatorioPontoColaborador({ id }: { id: string }) {
               {pessoa.periodo.atestados ? ` · ${pessoa.periodo.atestados} ${pessoa.periodo.atestados === 1 ? "atestado" : "atestados"}` : ""}
             </p>
             {pessoa.periodo.incompletas ? <p className="text-xs font-semibold text-amber-700">{pessoa.periodo.incompletas} {pessoa.periodo.incompletas === 1 ? "batida incompleta" : "batidas incompletas"}: falta a saída</p> : null}
+            {pessoa.periodo.almocoPerto ? <p className="text-xs font-semibold text-rose-700">{pessoa.periodo.almocoPerto} {pessoa.periodo.almocoPerto === 1 ? "dia com almoço" : "dias com almoço"} a menos de 1 hora da entrada ou da saída</p> : null}
             {pessoa.estagio && pessoa.periodo.saldo > 0 ? <p className="text-xs font-semibold text-amber-700">Estágio acima da jornada: a Lei do Estágio não permite hora extra.</p> : null}
           </Card>
         </div>
@@ -278,7 +285,7 @@ export function RelatorioPontoColaborador({ id }: { id: string }) {
       {relatorio.isLoading ? <Skeleton className="h-72" /> : null}
       {relatorio.isError ? <Alerta>{relatorio.error instanceof ApiError ? relatorio.error.message : "Não foi possível carregar o relatório."}</Alerta> : null}
       {pessoa?.semRegistro ? <Empty titulo="Sem cadastro de ponto" texto="Esta pessoa ainda não tem cadastro de ponto nesta empresa." /> : null}
-      {pessoa && !pessoa.semRegistro ? (
+      {pessoa && !pessoa.semRegistro && !pessoa.semPermissaoVer ? (
         <Card className="p-0">
           <div className="overflow-x-auto">
             <table className="data-table min-w-[860px]">
@@ -294,6 +301,7 @@ export function RelatorioPontoColaborador({ id }: { id: string }) {
                       {dataBr(dia.data)}
                       {dia.anterior ? <span className="ml-2 align-middle"><Badge value="Desligado">Contrato anterior</Badge></span> : null}
                       {dia.ajustado ? <span className="ml-2 align-middle" title="Horário corrigido ou incluído por pedido aprovado. A marcação original do relógio continua guardada."><Badge value="pendente">Ajustado</Badge></span> : null}
+                      {dia.alertaAlmoco ? <span className="ml-2 align-middle" title={dia.alertaAlmoco}><Badge value="almoco">Almoço perto {/entrada e da saída/.test(dia.alertaAlmoco) ? "das pontas" : /da entrada/.test(dia.alertaAlmoco) ? "da entrada" : "da saída"}</Badge></span> : null}
                     </td>
                     <td className="text-slate-500">{dia.dia}</td>
                     <td className={cn("tabular-nums", dia.situacao ? "font-semibold text-amber-700" : "")}>{dia.situacao || dia.entrada1 || "—"}</td>

@@ -134,16 +134,16 @@ export function RedefinirSenha({ id, nome }: { id: string; nome: string }) {
 }
 
 /** Blocos de jornada de trabalho e férias (recesso, para estagiário) da pessoa, acima do relatório. */
-export function ConfiguracaoPonto({ id, estagio, desligado }: { id: string; estagio: boolean; desligado: boolean }) {
+export function ConfiguracaoPonto({ id, estagio, desligado, jornada = true, ferias = true }: { id: string; estagio: boolean; desligado: boolean; jornada?: boolean; ferias?: boolean }) {
   const config = useConfiguracao(id);
   // Desligado: só o relatório (somente leitura), para a empresa tirar o espelho de ponto.
   if (desligado) return <Alerta tom="info">Colaborador desligado. Os registros ficam guardados aqui para consulta; para mudar jornada ou férias, reative.</Alerta>;
   if (config.isError) return <Alerta>{mensagem(config.error, "Não foi possível carregar a configuração do ponto.")}</Alerta>;
   if (!config.data) return null;
   return (
-    <div className="grid gap-5 lg:grid-cols-2">
-      <Jornada id={id} atual={config.data.data} estagio={estagio} />
-      <Ferias id={id} periodos={config.data.data.ferias} estagio={estagio} />
+    <div className={jornada && ferias ? "grid gap-5 lg:grid-cols-2" : "grid gap-5"}>
+      {jornada ? <Jornada id={id} atual={config.data.data} estagio={estagio} /> : null}
+      {ferias ? <Ferias id={id} periodos={config.data.data.ferias} estagio={estagio} /> : null}
     </div>
   );
 }

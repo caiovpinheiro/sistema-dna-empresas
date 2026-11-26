@@ -120,6 +120,7 @@ export class PontoColaboradorService {
       where regexp_replace(coalesce(c.cpf, ''), '\\D', '', 'g') = $1
         and c.colaborador::text = '1'
         and col.status_ponto::text = '1'
+        and coalesce(col.status_colaborador, 1) = 1
         and e.ponto::text = '1'
       order by col.data_inicio desc nulls last
       limit 1
@@ -138,6 +139,17 @@ export class PontoColaboradorService {
       cpf: pessoa.cpf,
       atualiza_senha: pessoa.atualiza_senha,
     };
+  }
+
+  /** Ainda pode usar o app: contrato ativo, no ponto e empresa com o ponto ligado. Conferido em toda chamada. */
+  async acessoAtivo(idColaborador: string): Promise<boolean> {
+    const linha = await this.db.query(`
+      select 1 from dna_work.colaborador col
+      join dna_work.empresa e on e.id_empresa = col.id_empresa
+      where col.id_colaborador = $1 and coalesce(col.status_colaborador, 1) = 1
+        and col.status_ponto::text = '1' and e.ponto::text = '1'
+    `, [idColaborador]);
+    return Boolean(linha.rowCount);
   }
 
   async painel(idColaborador: string): Promise<SessaoPonto> {
@@ -194,7 +206,7 @@ export class PontoColaboradorService {
    * 60 dias, que ela pode pedir para ajustar.
    */
   async solicitacoes(idColaborador: string) {
-    await this.pessoa(idColaborador);
+    const pessoa = await this.pessoa(idColaborador);
     const ajustes = await this.db.query<{ id: number; data: string; tipo: string; hora: string | null; texto: string | null; aceite: number | null; resposta: string | null; entrada: string | null; saida: string | null }>(`
       select j.id, t.data, j.tipo, j.hora, j.texto, j.aceite, j.resposta, t.entrada, t.saida
       from dna_work.justificativa j
@@ -246,8 +258,11 @@ export class PontoColaboradorService {
     ].sort((a, b) => (a.situacao === "Pendente" ? 0 : 1) - (b.situacao === "Pendente" ? 0 : 1) || b.dataIso.localeCompare(a.dataIso));
     return {
       pedidos,
+      // Para a tela montar o espelho dos dias: de hoje até 60 dias atrás, sem passar do início do contrato.
+      hoje: agoraSp().iso,
+      desde: [desde.replaceAll("/", "-"), (pessoa.inicio ?? "").replaceAll("/", "-")].filter((valor) => /^\d{4}-\d{2}-\d{2}$/.test(valor)).sort().pop() ?? desde.replaceAll("/", "-"),
       batidas: batidas.rows.map((linha) => ({
-        id: linha.id, data: dataBr(linha.data), entrada: linha.entrada, saida: linha.saida,
+        id: linha.id, data: dataBr(linha.data), dataIso: linha.data.replaceAll("/", "-"), entrada: linha.entrada, saida: linha.saida,
         pendenteEntrada: linha.pend_entrada, pendenteSaida: linha.pend_saida,
       })),
     };

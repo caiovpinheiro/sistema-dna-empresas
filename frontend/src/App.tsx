@@ -14,10 +14,12 @@ import { AlterarSenhaPage } from "./pages/senha";
 import { JornadasPage } from "./pages/jornadas";
 import { SolicitacoesPonto } from "./pages/solicitacoes-ponto";
 import { FeriadosPage } from "./pages/feriados";
+import { PermissoesColaborador, PermissoesPontoLista } from "./pages/permissoes-ponto";
+import { GestaoPonto } from "./pages/gestao-ponto";
 import { Alerta, Button, CabecalhoPagina, Card, Empty, Field, Input, Skeleton, botao } from "./components/ui";
 import { iniciais } from "./lib/formato";
 import { FundoLiquido } from "./components/fundo-liquido";
-import { ApiError, api } from "./lib/api";
+import { ApiError, api, usarGestaoDoPonto } from "./lib/api";
 
 type Empresa = { id: string; nome: string };
 type Sessao = {
@@ -31,7 +33,20 @@ type ItemMenu = { id: string; label: string; link: string | null; children: Item
 
 const client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
 
+/** Gestão do ponto pelo app do colaborador: as telas do ponto com outro endereço de API (ver usarGestaoDoPonto). */
+const naGestaoDoPonto = window.location.pathname === "/ponto/gestao" || window.location.pathname.startsWith("/ponto/gestao/");
+if (naGestaoDoPonto) usarGestaoDoPonto();
+
 export function App() {
+  if (naGestaoDoPonto) {
+    return (
+      <QueryClientProvider client={client}>
+        <BrowserRouter basename="/ponto/gestao">
+          <GestaoPonto />
+        </BrowserRouter>
+      </QueryClientProvider>
+    );
+  }
   return (
     <QueryClientProvider client={client}>
       <BrowserRouter>
@@ -52,13 +67,13 @@ const ROTAS = [
   "/dashboard", "/colaboradores", "/colaboradores/novo", "/colaboradores/:id",
   "/jornadas", "/escalas", "/escalas/nova", "/escalas/:id", "/cargas", "/cargas/nova", "/cargas/:id",
   "/feriados", "/feriados/novo", "/feriados/:id",
-  "/ponto/colaboradores", "/ponto/colaborador/:id", "/ponto/relatorio", "/ponto/solicitacoes",
+  "/ponto/colaboradores", "/ponto/colaborador/:id", "/ponto/relatorio", "/ponto/solicitacoes", "/ponto/permissoes", "/ponto/permissoes/:id",
   "/vagas", "/vagas/nova", "/vagas/:id", "/faturas", "/faturas/:id",
   "/talentos", "/talentos/novo", "/talentos/:id",
   "/relatorios/encaminhamentos", "/relatorios/encaminhamentos/:id", "/relatorios/documentos", "/relatorios/documentos/:id",
   "/relatorios/seguro", "/relatorios/seguro/:id", "/relatorios/calendario", "/relatorios/calendario/:id",
   "/avaliacoes", "/avaliacoes/:id", "/holerite", "/holerite/:id",
-  "/empresa", "/empresa/filial", "/usuarios", "/usuarios/novo", "/usuarios/:id",
+  "/empresa", "/empresa/filial", "/usuarios", "/usuarios/novo", "/usuarios/:id", "/usuarios/colaborador/:id",
   "/contratados", "/contratados/:id", "/opcao", "/senha",
 ];
 
@@ -82,7 +97,7 @@ function Portal({ sessao }: { sessao: Sessao }) {
   const [aberto, setAberto] = useState(false);
   const [hover, setHover] = useState(false);
   const link = params.get("link");
-  const itens = menu.data?.data ?? [];
+  const itens = semCadastroDeUsuario(menu.data?.data ?? []);
   const atual = link ? achar(itens, link) : null;
   const { pathname, search } = useLocation();
   const empresa = sessao.empresas.find((item) => item.id === sessao.empresaId)?.nome;
@@ -98,14 +113,14 @@ function Portal({ sessao }: { sessao: Sessao }) {
   }, [pathname, search]);
 
   const nav = (expandido: boolean, fechar: () => void) => (
-    <nav className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 py-2" aria-label="Menu da empresa">
+    <nav className="menu-sem-barra min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 py-2" aria-label="Menu da empresa">
       <ul className="grid gap-1">
         <li>
           <ItemLink href="/dashboard" label="Início" icone={LayoutDashboard} ativo={pathname === "/dashboard"} expandido={expandido} onNavigate={fechar} />
         </li>
         {menu.isLoading ? <li className="px-3 py-2 text-xs text-slate-500">{expandido ? "Carregando menu…" : ""}</li> : null}
         {menu.isError && expandido ? <li className="px-3 py-2 text-xs text-rose-300">{menu.error instanceof ApiError ? menu.error.message : "Não foi possível carregar o menu."}</li> : null}
-        {itens.filter((item) => !(item.link && destinoDoLink(item.link) === "/dashboard")).map(simplificarPonto).map((item) => <Ramo key={item.id} item={item} ativo={link} expandido={expandido} onNavigate={fechar} />)}
+        {itens.filter((item) => !(item.link && destinoDoLink(item.link) === "/dashboard")).map(simplificarMenu).map((item) => <Ramo key={item.id} item={item} ativo={link} expandido={expandido} onNavigate={fechar} />)}
       </ul>
     </nav>
   );
@@ -167,6 +182,9 @@ function Portal({ sessao }: { sessao: Sessao }) {
           {pathname.startsWith("/ponto/colaborador/") ? <RelatorioPontoColaborador id={decodeURIComponent(pathname.slice("/ponto/colaborador/".length))} /> : null}
           {pathname === "/ponto/relatorio" ? <RelatorioPonto /> : null}
           {pathname === "/ponto/solicitacoes" ? <SolicitacoesPonto /> : null}
+          {/* As permissões do ponto ficam em Usuários: links antigos vão para lá. */}
+          {pathname === "/ponto/permissoes" ? <Navigate to="/usuarios" replace /> : null}
+          {pathname.startsWith("/ponto/permissoes/") ? <Navigate to={`/usuarios/colaborador/${pathname.slice("/ponto/permissoes/".length)}`} replace /> : null}
           {pathname === "/vagas/nova" && tipoUrl !== "4" ? <VagaNova key={tipoUrl} tipo={tipoUrl} tipos={tipos} /> : null}
           {pathname === "/vagas/nova" && tipoUrl === "4" ? <Navigate to="/vagas" replace /> : null}
           {pathname === "/talentos" ? <Listagem titulo="Banco de talentos" descricao="Pessoas cadastradas pela empresa para futuras vagas." caminho="/api/v1/empresa/talentos" novo="/talentos/novo" rotuloNovo="Cadastrar talento" singular="talento" plural="talentos" linkNome={(linha) => linha.id ? `/talentos/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cidade", titulo: "Cidade" }, { chave: "bairro", titulo: "Bairro" }, { chave: "estado", titulo: "Estado" }, { chave: "ensino", titulo: "Ensino" }, { chave: "curso", titulo: "Curso" }, { chave: "datacadastro", titulo: "Cadastro" }]} /> : null}
@@ -177,8 +195,10 @@ function Portal({ sessao }: { sessao: Sessao }) {
           {pathname === "/relatorios/calendario" ? <Listagem titulo="Calendário" descricao="Entrevistas e compromissos marcados nas vagas." caminho="/api/v1/empresa/calendario" singular="compromisso" plural="compromissos" linkNome={(linha) => linha.id ? `/relatorios/calendario/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Compromisso" }, { chave: "cargo", titulo: "Vaga" }, { chave: "data", titulo: "Data" }, { chave: "hora", titulo: "Início" }, { chave: "termino", titulo: "Término" }]} /> : null}
           {pathname === "/avaliacoes" ? <Listagem titulo="Avaliações" descricao="Avaliações de desempenho dos colaboradores." caminho="/api/v1/empresa/avaliacoes" singular="avaliação" plural="avaliações" linkNome={(linha) => linha.id ? `/avaliacoes/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Colaborador" }, { chave: "ciclo", titulo: "Ciclo" }, { chave: "area", titulo: "Área" }, { chave: "data", titulo: "Data" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
           {pathname === "/holerite" ? <Listagem titulo="Holerites" descricao="Folha de pagamento por colaborador e competência." caminho="/api/v1/empresa/holerites" singular="holerite" plural="holerites" linkNome={(linha) => linha.id ? `/holerite/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "cargo", titulo: "Cargo" }, { chave: "competencia", titulo: "Competência" }, { chave: "bruto", titulo: "Bruto" }, { chave: "liquido", titulo: "Líquido" }]} /> : null}
-          {pathname === "/usuarios" ? <Listagem titulo="Usuários" descricao="Quem da empresa acessa este portal." caminho="/api/v1/empresa/usuarios" novo="/usuarios/novo" rotuloNovo="Novo usuário" singular="usuário" plural="usuários" linkNome={(linha) => linha.id ? `/usuarios/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "email", titulo: "E-mail" }, { chave: "tipo", titulo: "Tipo" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
-          {pathname === "/usuarios/novo" ? <Formulario titulo="Cadastrar usuário" descricao="A pessoa entra no portal com o e-mail e a senha informados aqui." destino="/api/v1/empresa/usuarios" voltar="/usuarios" campos={[["nome", "Nome", "text"], ["email", "E-mail", "email"], ["telefone", "Telefone", "text"], ["senha", "Senha", "password"]]} /> : null}
+          {pathname === "/usuarios" ? <Listagem titulo="Usuários" descricao="O acesso da empresa ao portal é único. Para alguém ajudar no ponto, dê permissões a um colaborador na lista abaixo; ele usa o app do ponto com o CPF e a senha dele." caminho="/api/v1/empresa/usuarios" singular="usuário" plural="usuários" linkNome={(linha) => linha.id ? `/usuarios/${linha.id}` : null} colunas={[{ chave: "nome", titulo: "Nome" }, { chave: "email", titulo: "E-mail" }, { chave: "tipo", titulo: "Tipo" }, { chave: "situacao", titulo: "Situação" }]} /> : null}
+          {pathname === "/usuarios" ? <div className="mt-8"><PermissoesPontoLista /></div> : null}
+          {pathname.startsWith("/usuarios/colaborador/") ? <PermissoesColaborador id={decodeURIComponent(pathname.slice("/usuarios/colaborador/".length))} /> : null}
+          {pathname === "/usuarios/novo" ? <Navigate to="/usuarios" replace /> : null}
           {pathname === "/empresa/filial" ? <Formulario titulo="Cadastrar filial" destino="/api/v1/empresa/filiais" voltar="/empresa" campos={[["nome", "Nome", "text"], ["cnpj", "CNPJ", "text"], ["email", "E-mail", "email"], ["cidade", "Cidade", "text"]]} /> : null}
           {pathname === "/empresa" ? <EmpresaDados /> : null}
           {pathname === "/senha" ? <AlterarSenhaPage /> : null}
@@ -253,24 +273,39 @@ function Ramo({ item, ativo, expandido, onNavigate, nivel = 0 }: { item: ItemMen
 }
 
 /**
- * No Ponto Inteligente cada submenu vira um link só, para a lista: "Configurar Escalas › Consultar / Cadastrar" vira "Escalas".
- * O cadastro abre numa janela na própria lista. As permissões não mudam: o menu da API continua o mesmo, só o desenho muda.
+ * Cada submenu vira um link só, para a lista: "Usuários › Consultar / Cadastrar" vira "Usuários", e o cadastro fica num
+ * botão na própria lista (como no ponto). Submenus com várias telas diferentes (ex.: Relatórios) continuam abrindo.
+ * As permissões não mudam: o menu da API continua o mesmo, só o desenho muda.
  */
+function simplificarMenu(item: ItemMenu): ItemMenu {
+  const ehCadastro = (filho: ItemMenu) => /^(cadastrar|abrir|criar)\b/i.test(filho.label) || /\/(nova|novo|filial)(\?|$)/.test(destinoDoLink(filho.link ?? ""));
+  const achatar = (grupo: ItemMenu): ItemMenu => {
+    if (grupo.link || !grupo.children.length || grupo.children.some((filho) => filho.children.length)) return grupo;
+    const listas = grupo.children.filter((filho) => !ehCadastro(filho));
+    if (listas.length > 1) return grupo;
+    const principal = listas[0] ?? grupo.children[0];
+    const label = grupo.label.replace(/^configurar\s+/i, "");
+    return { ...grupo, label: label.charAt(0).toUpperCase() + label.slice(1), link: principal.link, children: [] };
+  };
+  const filhos = item.children.map(achatar);
+  // Grupo do topo com um link só (ex.: Financeiro › Financeiro) vira o próprio link.
+  if (!item.link && filhos.length === 1 && filhos[0].link) return { ...item, link: filhos[0].link, children: [] };
+  return simplificarPonto({ ...item, children: filhos });
+}
+
+/** Ponto Inteligente: pedidos de ajuste e permissões junto dos colaboradores, e escala + carga horária viram "Jornadas". */
 function simplificarPonto(item: ItemMenu): ItemMenu {
   if (!/ponto/i.test(item.label)) return item;
   let temJornada = false;
   return {
     ...item,
-    children: item.children.map((grupo) => {
-      if (grupo.link || !grupo.children.length) return grupo;
-      const cadastro = (filho: ItemMenu) => /^cadastrar/i.test(filho.label) || /[?/](nova|novo)/.test(destinoDoLink(filho.link ?? ""));
-      const principal = grupo.children.find((filho) => !cadastro(filho)) ?? grupo.children[0];
-      const label = grupo.label.replace(/^configurar\s+/i, "");
-      return { ...grupo, label: label.charAt(0).toUpperCase() + label.slice(1), link: principal.link, children: [] };
-    }).flatMap((grupo) => {
+    children: item.children.flatMap((grupo) => {
       // Os pedidos de ajuste ficam logo depois da lista de colaboradores do ponto (quem vê o ponto, vê os pedidos).
       if (grupo.link && destinoDoLink(grupo.link) === "/ponto/colaboradores") {
-        return [grupo, { id: `${grupo.id}-solicitacoes`, label: "Solicitações de ajuste", link: "/ponto/solicitacoes", children: [] }];
+        return [
+          grupo,
+          { id: `${grupo.id}-solicitacoes`, label: "Solicitações de ajuste", link: "/ponto/solicitacoes", children: [] },
+        ];
       }
       // Escala e carga horária viraram um cadastro só: um item "Jornadas de trabalho" no lugar dos dois.
       if (!grupo.link || destinoDoLink(grupo.link) !== "/jornadas") return [grupo];
@@ -282,6 +317,13 @@ function simplificarPonto(item: ItemMenu): ItemMenu {
 }
 
 /** /vagas não fica marcado em /vagas/nova quando "Abrir vaga" também está no menu. */
+/** O acesso da empresa ao portal é único: o "Cadastrar" de Usuários do menu antigo some. */
+function semCadastroDeUsuario(itens: ItemMenu[]): ItemMenu[] {
+  return itens
+    .filter((item) => !(item.link && destinoDoLink(item.link) === "/usuarios/novo"))
+    .map((item) => ({ ...item, children: semCadastroDeUsuario(item.children) }));
+}
+
 function irmaoMaisExato(href: string, pathname: string) {
   return pathname.endsWith("/nova") || pathname.endsWith("/novo") || (href === "/empresa" && pathname === "/empresa/filial");
 }
@@ -658,6 +700,7 @@ const TITULOS: Array<[RegExp, string]> = [
   [/^\/contratados/, "Contratados"],
   [/^\/ponto\/relatorio$/, "Relatório de ponto"],
   [/^\/ponto\/solicitacoes$/, "Solicitações de ajuste"],
+  [/^\/usuarios\/colaborador\//, "Permissões do ponto"],
   [/^\/ponto\/colaboradores$/, "Colaboradores"],
   [/^\/ponto/, "Ponto do colaborador"],
   [/^\/jornadas/, "Jornadas de trabalho"],

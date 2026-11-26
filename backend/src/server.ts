@@ -20,6 +20,29 @@ try {
   await db.query("alter table dna_work.colaborador add column if not exists data_desligamento character varying");
   // Senha do app do ponto em Argon2id (com salt), como a do portal da empresa.
   await db.query("alter table dna_work.candidato add column if not exists senha_hash character varying");
+  // Permissões que a empresa dá a um colaborador para cuidar do ponto de outros, pelo app do ponto (o login da empresa
+  // é um só). id_gestor = id_candidato de quem recebe; sem linha, o colaborador só vê o próprio ponto.
+  await db.query(`
+    create table if not exists dna_work.ponto_permissao_gestor (
+      id_gestor character varying not null,
+      id_empresa character varying not null,
+      permissao character varying(20) not null,
+      todos boolean not null default false,
+      primary key (id_gestor, id_empresa, permissao)
+    )
+  `);
+  await db.query(`
+    create table if not exists dna_work.ponto_permissao_gestor_pessoa (
+      id_gestor character varying not null,
+      id_empresa character varying not null,
+      permissao character varying(20) not null,
+      id_candidato character varying not null,
+      primary key (id_gestor, id_empresa, permissao, id_candidato)
+    )
+  `);
+  // Almoço livre: a pessoa escolhe a hora de sair, a jornada só fixa quanto tempo dura (em minutos).
+  await db.query("alter table dna_work.ponto_carga_base add column if not exists refeicao_livre smallint not null default 0");
+  await db.query("alter table dna_work.ponto_carga_base add column if not exists refeicao_minutos integer");
   // Pedido do colaborador para incluir uma marcação que ele esqueceu (entrada, saída ou o dia inteiro). Aprovado, vira
   // uma linha em tabela_ponto só com os campos *_editado: fica identificada como incluída, sem horário do relógio.
   await db.query(`
@@ -39,6 +62,9 @@ try {
     )
   `);
   await db.query("create index if not exists ponto_inclusao_colaborador on dna_work.ponto_inclusao (id_colaborador)");
+  // Pedido respondido por um colaborador com permissão (pelo app do ponto): guarda quem foi, além do login da empresa.
+  await db.query("alter table dna_work.ponto_inclusao add column if not exists id_gestor character varying");
+  await db.query("alter table dna_work.justificativa add column if not exists id_gestor character varying");
   await db.query(`
     create table if not exists dna_work.cadastro_empresa_aceite (
       id uuid primary key,

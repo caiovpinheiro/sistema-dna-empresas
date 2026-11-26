@@ -38,19 +38,30 @@ const DIAS_SEMANA = [
 
 type CargaBase = {
   id: number; entrada: string | null; saida_refeicao: string | null; retorno_refeicao: string | null; saida: string | null;
-  tolerancia: string | null; pausa: number | null;
+  tolerancia: string | null; pausa: number | null; refeicao_livre: number | null; refeicao_minutos: number | null;
 };
 
-/** Horário de um dia a partir da carga. Sem pausa, o sistema antigo grava a refeição igual à saída. */
+const COLUNAS_CARGA = "id, entrada, saida_refeicao, retorno_refeicao, saida, tolerancia, pausa, refeicao_livre, refeicao_minutos";
+
+/** Almoço livre: só a duração é fixa; a pessoa sai e volta quando quiser dentro do expediente. */
+const refeicaoLivre = (carga: CargaBase | undefined) => Boolean(carga && Number(carga.refeicao_livre) === 1 && Number(carga.refeicao_minutos) > 0);
+
+/** "01:30" a partir de 90 minutos. */
+const duracao = (minutos: number) => `${String(Math.floor(minutos / 60)).padStart(2, "0")}:${String(minutos % 60).padStart(2, "0")}`;
+
+/** Horário de um dia a partir da carga. Sem pausa (ou com almoço livre), o sistema antigo grava a refeição igual à saída. */
 function horarioDaCarga(carga: CargaBase) {
   const hhmm = (valor: string | null) => (valor ?? "").slice(0, 5);
-  const pausa = Number(carga.pausa) === 1 && hhmm(carga.saida_refeicao) !== hhmm(carga.saida);
+  const livre = refeicaoLivre(carga);
+  const pausa = livre || (Number(carga.pausa) === 1 && hhmm(carga.saida_refeicao) !== hhmm(carga.saida));
   return {
     entrada: hhmm(carga.entrada),
     saida: hhmm(carga.saida),
     pausa,
-    saidaRefeicao: pausa ? hhmm(carga.saida_refeicao) : "",
-    retornoRefeicao: pausa ? hhmm(carga.retorno_refeicao) : "",
+    refeicaoLivre: livre,
+    duracaoRefeicao: livre ? duracao(Number(carga.refeicao_minutos)) : "",
+    saidaRefeicao: pausa && !livre ? hhmm(carga.saida_refeicao) : "",
+    retornoRefeicao: pausa && !livre ? hhmm(carga.retorno_refeicao) : "",
     tolerancia: (carga.tolerancia ?? "").trim() || "0",
   };
 }
@@ -71,15 +82,20 @@ function minutosEntre(inicio: string, fim: string) {
  */
 function regrasDaJornada(
   modalidade: "1" | "2",
-  dias: Array<{ rotulo: string; trabalha: boolean; entrada: string; saida: string; pausa: boolean; saidaRefeicao: string; retornoRefeicao: string }>,
+  dias: Array<{ rotulo: string; trabalha: boolean; entrada: string; saida: string; pausa: boolean; refeicaoLivre: boolean; minutosRefeicao: number; saidaRefeicao: string; retornoRefeicao: string }>,
 ) {
   const erros: string[] = [];
   const avisos: string[] = [];
   let semana = 0;
   for (const dia of dias.filter((item) => item.trabalha)) {
-    const intervalo = dia.pausa ? minutosEntre(dia.saidaRefeicao, dia.retornoRefeicao) : 0;
+    const intervalo = !dia.pausa ? 0 : dia.refeicaoLivre ? dia.minutosRefeicao : minutosEntre(dia.saidaRefeicao, dia.retornoRefeicao);
+    if (dia.pausa && intervalo >= minutosEntre(dia.entrada, dia.saida)) {
+      erros.push(`${dia.rotulo}: a refeição não pode ser maior que o expediente.`);
+      continue;
+    }
     const trabalhado = minutosEntre(dia.entrada, dia.saida) - intervalo;
     semana += trabalhado;
+    if (intervalo > 120) avisos.push(`${dia.rotulo}: intervalo de refeição acima de 2 horas só vale com acordo escrito ou convenção coletiva (CLT, art. 71).`);
     const horas = `${Math.floor(trabalhado / 60)}h${trabalhado % 60 ? String(trabalhado % 60).padStart(2, "0") : ""}`;
     if (modalidade === "1") {
       if (trabalhado > 360) erros.push(`${dia.rotulo}: ${horas} de trabalho. Estágio pode ter no máximo 6 horas por dia (Lei 11.788/2008, art. 10).`);
@@ -112,6 +128,24 @@ function dentroDaTolerancia(batidas: Array<{ entrada: string | null; saida: stri
   const horario = horarioDaCarga(carga);
   const doDia = TOLERANCIA_POR_DIA;
   const porBatida = TOLERANCIA_POR_BATIDA;
+  if (horario.refeicaoLivre) {
+    // Almoço livre: entrada e saída comparadas com o horário; a saída e a volta do almoço não têm hora certa, só a
+    // duração. A diferença da duração conta pelas duas marcações do almoço (até 5 min cada, 10 no total).
+    const feitas = batidas.flatMap((batida) => [batida.entrada, batida.saida]);
+    if (feitas.length !== 4 || feitas.some((valor) => !valor)) return false;
+    const [entrada, saiAlmoco, voltaAlmoco, saida] = feitas.map((valor) => segundosRelogio(valor));
+    const previstaEntrada = segundosRelogio(horario.entrada);
+    const previstaSaida = segundosRelogio(horario.saida);
+    if ([entrada, saiAlmoco, voltaAlmoco, saida, previstaEntrada, previstaSaida].some((valor) => valor === null)) return false;
+    const perto = (a: number, b: number) => { const d = Math.abs(a - b); return Math.min(d, 24 * 3600 - d); };
+    const difEntrada = perto(entrada!, previstaEntrada!);
+    const difSaida = perto(saida!, previstaSaida!);
+    let almoco = voltaAlmoco! - saiAlmoco!;
+    if (almoco < 0) almoco += 24 * 3600;
+    const difAlmoco = Math.abs(almoco - Number(carga.refeicao_minutos) * 60);
+    if (difEntrada > porBatida * 60 || difSaida > porBatida * 60 || difAlmoco > 2 * porBatida * 60) return false;
+    return difEntrada + difSaida + difAlmoco <= doDia * 60;
+  }
   const previstas = horario.pausa ? [horario.entrada, horario.saidaRefeicao, horario.retornoRefeicao, horario.saida] : [horario.entrada, horario.saida];
   const feitas = batidas.flatMap((batida) => [batida.entrada, batida.saida]).filter((valor): valor is string => Boolean(valor));
   if (feitas.length !== previstas.length) return false;
@@ -133,7 +167,7 @@ function dentroDaTolerancia(batidas: Array<{ entrada: string | null; saida: stri
  * Soma de um período do relatório: horas feitas, previstas, saldo (em minutos, com sinal) e ocorrências.
  * Soma os segundos de verdade de cada dia e só arredonda no fim, para o arredondamento diário não se acumular.
  */
-function resumoDoPeriodo(dias: Array<{ segundosFeitos: number; segundosCarga: number; saldoSegundos: number; falta: boolean; incompleta: boolean; atestado: boolean; entrada1: string }>) {
+function resumoDoPeriodo(dias: Array<{ segundosFeitos: number; segundosCarga: number; saldoSegundos: number; falta: boolean; incompleta: boolean; atestado: boolean; entrada1: string; alertaAlmoco: string }>) {
   const soma = (campo: "segundosFeitos" | "segundosCarga" | "saldoSegundos") => paraMinutos(dias.reduce((total, dia) => total + dia[campo], 0));
   return {
     feitos: soma("segundosFeitos"),
@@ -143,6 +177,8 @@ function resumoDoPeriodo(dias: Array<{ segundosFeitos: number; segundosCarga: nu
     faltas: dias.filter((dia) => dia.falta).length,
     incompletas: dias.filter((dia) => dia.incompleta).length,
     atestados: dias.filter((dia) => dia.atestado).length,
+    // Dias com o almoço a menos de 1 hora da entrada ou da saída (ver alertaDoAlmoco).
+    almocoPerto: dias.filter((dia) => dia.alertaAlmoco).length,
   };
 }
 
@@ -151,7 +187,9 @@ function resumoDaJornada(dias: Array<{ rotulo: string; trabalha: boolean; horari
   const grupos: Array<{ inicio: string; fim: string; texto: string }> = [];
   for (const dia of dias) {
     if (!dia.trabalha) continue;
-    const texto = dia.horario ? `${dia.horario.entrada}–${dia.horario.saida}` : "sem horário";
+    const texto = dia.horario
+      ? `${dia.horario.entrada}–${dia.horario.saida}${dia.horario.refeicaoLivre ? ` (almoço livre de ${Number(dia.horario.duracaoRefeicao.slice(0, 2))}h${dia.horario.duracaoRefeicao.slice(3) === "00" ? "" : dia.horario.duracaoRefeicao.slice(3)})` : ""}`
+      : "sem horário";
     const ultimo = grupos[grupos.length - 1];
     const anterior = dias[dias.indexOf(dia) - 1];
     if (ultimo && ultimo.texto === texto && anterior?.trabalha && anterior.rotulo === ultimo.fim) ultimo.fim = dia.rotulo;
@@ -311,12 +349,13 @@ function relogio(minutos: number) {
   return `${String(hora).padStart(2, "0")}:${String(minuto).padStart(2, "0")}:00`;
 }
 
-function minutosDaCarga(carga: { entrada: string | null; saida_refeicao: string | null; retorno_refeicao: string | null; saida: string | null } | undefined) {
+function minutosDaCarga(carga: CargaBase | undefined) {
   const entrada = minutosRelogio(carga?.entrada);
   const saida = minutosRelogio(carga?.saida);
   if (entrada === null || saida === null) return 0;
   let total = saida - entrada;
   if (total < 0) total += 24 * 60;
+  if (refeicaoLivre(carga)) return Math.max(0, total - Number(carga!.refeicao_minutos));
   const pausaSaida = minutosRelogio(carga?.saida_refeicao);
   const pausaVolta = minutosRelogio(carga?.retorno_refeicao);
   if (pausaSaida !== null && pausaVolta !== null && pausaVolta !== saida) {
@@ -325,6 +364,31 @@ function minutosDaCarga(carga: { entrada: string | null; saida_refeicao: string 
     total -= pausa;
   }
   return Math.max(0, total);
+}
+
+/**
+ * O intervalo serve para descanso no meio do expediente (CLT, art. 71). A lei não diz quanto longe das pontas ele precisa
+ * ficar, mas a Justiça do Trabalho não aceita almoço colado na entrada ou na saída. Critério nosso, só para a empresa
+ * ver: sair para o almoço com menos de 1 hora de trabalho, ou voltar com menos de 1 hora para terminar o dia.
+ */
+const ALMOCO_LONGE_DAS_PONTAS = 60 * 60;
+
+function alertaDoAlmoco(batidas: Array<{ entrada: string | null; saida: string | null }>) {
+  if (batidas.length < 2) return "";
+  const entrada = segundosRelogio(batidas[0].entrada);
+  const saiAlmoco = segundosRelogio(batidas[0].saida);
+  const voltaAlmoco = segundosRelogio(batidas[1].entrada);
+  const saida = segundosRelogio(batidas[batidas.length - 1].saida);
+  const entre = (a: number, b: number) => (b >= a ? b - a : b - a + 24 * 3600);
+  const texto = (segundos: number) => { const m = Math.round(segundos / 60); return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}` : `${m} min`; };
+  const avisos: string[] = [];
+  if (entrada !== null && saiAlmoco !== null && entre(entrada, saiAlmoco) < ALMOCO_LONGE_DAS_PONTAS) {
+    avisos.push(`saiu para o almoço ${texto(entre(entrada, saiAlmoco))} depois de entrar`);
+  }
+  if (voltaAlmoco !== null && saida !== null && entre(voltaAlmoco, saida) < ALMOCO_LONGE_DAS_PONTAS) {
+    avisos.push(`voltou do almoço ${texto(entre(voltaAlmoco, saida))} antes de sair`);
+  }
+  return avisos.length ? `Almoço muito perto ${avisos.length === 2 ? "da entrada e da saída" : avisos[0].startsWith("saiu") ? "da entrada" : "da saída"}: ${avisos.join(" e ")}.` : "";
 }
 
 /** Tempo trabalhado no dia em segundos (cada trecho com os segundos, sem cortar). */
@@ -476,7 +540,7 @@ export class PortalDadosService {
    * (hoje dentro de um período de dna_work.ferias), Fora do ponto (status_ponto 0), Desligado ou Ativo. Jornada = escala + carga horária ligadas.
    * Modalidade: a do colaborador (tipo_vaga) ou a da vaga da última contratação.
    */
-  async colaboradoresPonto(usuarioId: string, empresaId: string, busca: string, status: string) {
+  async colaboradoresPonto(usuarioId: string, empresaId: string, busca: string, status: string, permitidos: Set<string> | null = null) {
     await this.garantir(usuarioId, empresaId);
     const filtro = status === "ativo" || status === "inativo" ? status : "todos";
     const hoje = dataLegado(dataSp(0));
@@ -521,7 +585,7 @@ export class PortalDadosService {
          or ($5 = 'inativo' and situacao not in ('Ativo', 'Férias', 'Recesso'))
       order by nome
     `, [empresaId, busca, `%${busca}%`, hoje, filtro]);
-    return rows.rows;
+    return permitidos ? rows.rows.filter((linha) => permitidos.has(String(linha.id_candidato))) : rows.rows;
   }
 
   /** Colaborador do ponto pelo id_candidato da tela (o ativo primeiro, depois o mais recente). */
@@ -609,6 +673,9 @@ export class PortalDadosService {
         where id_candidato = $1
           and not exists (select 1 from dna_work.colaborador c where c.id_candidato = $1 and c.status_colaborador = 1)
       `, [idCandidato]);
+      // Desligado perde na hora as permissões do ponto da equipe (se voltar, a empresa dá de novo).
+      await client.query("delete from dna_work.ponto_permissao_gestor_pessoa where id_gestor = $1 and id_empresa = $2", [idCandidato, empresaId]);
+      await client.query("delete from dna_work.ponto_permissao_gestor where id_gestor = $1 and id_empresa = $2", [idCandidato, empresaId]);
       await client.query("COMMIT");
       return { ativo: false };
     } catch (error) {
@@ -745,7 +812,7 @@ export class PortalDadosService {
         order by t.nome
       `, [empresaId, id ?? ""]),
       this.db.query<CargaBase>(
-        "select id, entrada, saida_refeicao, retorno_refeicao, saida, tolerancia, pausa from dna_work.ponto_carga_base where id_empresa = $1",
+        `select ${COLUNAS_CARGA} from dna_work.ponto_carga_base where id_empresa = $1`,
         [empresaId],
       ),
     ]);
@@ -797,14 +864,22 @@ export class PortalDadosService {
       const saida = body[`${chave}_saida`] ?? "";
       const saidaRefeicao = body[`${chave}_saida_refeicao`] ?? "";
       const retornoRefeicao = body[`${chave}_retorno_refeicao`] ?? "";
+      // Almoço livre: só o tempo de refeição é obrigatório (HH:MM); a hora de sair fica com a pessoa.
+      const refeicaoLivre = pausa && body[`${chave}_refeicao_livre`] === "1";
+      const duracaoRefeicao = body[`${chave}_duracao_refeicao`] ?? "";
+      const minutosRefeicao = /^\d{2}:[0-5]\d$/.test(duracaoRefeicao) ? Number(duracaoRefeicao.slice(0, 2)) * 60 + Number(duracaoRefeicao.slice(3, 5)) : 0;
       if (trabalha) {
         if (!hora.test(entrada)) campos[`${chave}_entrada`] = `Informe a entrada de ${rotulo.toLowerCase()}.`;
         if (!hora.test(saida)) campos[`${chave}_saida`] = `Informe a saída de ${rotulo.toLowerCase()}.`;
         else if (saida === entrada) campos[`${chave}_saida`] = "A saída precisa ser diferente da entrada.";
-        if (pausa && !hora.test(saidaRefeicao)) campos[`${chave}_saida_refeicao`] = "Informe a saída para a refeição.";
-        if (pausa && !hora.test(retornoRefeicao)) campos[`${chave}_retorno_refeicao`] = "Informe o retorno da refeição.";
+        if (refeicaoLivre) {
+          if (minutosRefeicao < 15) campos[`${chave}_duracao_refeicao`] = "Informe o tempo de refeição (pelo menos 15 minutos).";
+        } else {
+          if (pausa && !hora.test(saidaRefeicao)) campos[`${chave}_saida_refeicao`] = "Informe a saída para a refeição.";
+          if (pausa && !hora.test(retornoRefeicao)) campos[`${chave}_retorno_refeicao`] = "Informe o retorno da refeição.";
+        }
       }
-      return { chave, rotulo, trabalha, pausa, entrada, saida, saidaRefeicao, retornoRefeicao };
+      return { chave, rotulo, trabalha, pausa, refeicaoLivre, minutosRefeicao, entrada, saida, saidaRefeicao, retornoRefeicao };
     });
     if (!dias.some((dia) => dia.trabalha)) campos.dias = "Marque pelo menos um dia de trabalho.";
     const primeiro = Object.values(campos)[0];
@@ -824,25 +899,28 @@ export class PortalDadosService {
       const cargaDoDia: Record<string, number | null> = {};
       for (const dia of dias) {
         if (!dia.trabalha) { cargaDoDia[dia.chave] = null; continue; }
-        // Sem pausa, o sistema antigo grava a refeição igual à saída.
-        const saidaRefeicao = dia.pausa ? dia.saidaRefeicao : dia.saida;
-        const retornoRefeicao = dia.pausa ? dia.retornoRefeicao : dia.saida;
+        // Sem pausa ou com almoço livre, o sistema antigo grava a refeição igual à saída (não há hora certa).
+        const fixa = dia.pausa && !dia.refeicaoLivre;
+        const saidaRefeicao = fixa ? dia.saidaRefeicao : dia.saida;
+        const retornoRefeicao = fixa ? dia.retornoRefeicao : dia.saida;
+        const minutosLivre = dia.refeicaoLivre ? dia.minutosRefeicao : null;
         const igual = await client.query<{ id: number }>(`
           select id from dna_work.ponto_carga_base
           where id_empresa = $1 and entrada = $2 and saida = $3 and coalesce(saida_refeicao, '') = $4
             and coalesce(retorno_refeicao, '') = $5 and coalesce(nullif(tolerancia, ''), '0') = $6 and coalesce(pausa, 0) = $7
+            and refeicao_livre = $8 and refeicao_minutos is not distinct from $9::integer
           order by id limit 1
-        `, [empresaId, dia.entrada, dia.saida, saidaRefeicao, retornoRefeicao, tolerancia, dia.pausa ? 1 : 0]);
+        `, [empresaId, dia.entrada, dia.saida, saidaRefeicao, retornoRefeicao, tolerancia, dia.pausa ? 1 : 0, dia.refeicaoLivre ? 1 : 0, minutosLivre]);
         let idCarga = igual.rows[0]?.id;
         if (!idCarga) {
           idCarga = Number((await client.query<{ id: string }>("select coalesce(max(id), 0) + 1 as id from dna_work.ponto_carga_base")).rows[0].id);
           await client.query(`
             insert into dna_work.ponto_carga_base
-              (id, id_empresa, nome, tipo, entrada, saida_refeicao, retorno_refeicao, saida, tolerancia, pausa)
-            values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+              (id, id_empresa, nome, tipo, entrada, saida_refeicao, retorno_refeicao, saida, tolerancia, pausa, refeicao_livre, refeicao_minutos)
+            values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
           `, [
             idCarga, empresaId, `${dia.entrada} às ${dia.saida}`, tipoDaJornada(dia.entrada, dia.saida),
-            dia.entrada, saidaRefeicao, retornoRefeicao, dia.saida, tolerancia, dia.pausa ? 1 : 0,
+            dia.entrada, saidaRefeicao, retornoRefeicao, dia.saida, tolerancia, dia.pausa ? 1 : 0, dia.refeicaoLivre ? 1 : 0, minutosLivre,
           ]);
         }
         cargaDoDia[dia.chave] = idCarga;
@@ -1287,7 +1365,7 @@ export class PortalDadosService {
    * dentro do período.
    */
   /** Pedidos de ajuste de ponto dos colaboradores da empresa (tabela antiga "justificativa"). Pendentes primeiro. */
-  async solicitacoesPonto(usuarioId: string, empresaId: string, situacao: "pendentes" | "todas") {
+  async solicitacoesPonto(usuarioId: string, empresaId: string, situacao: "pendentes" | "todas", permitidos: Set<string> | null = null) {
     await this.garantir(usuarioId, empresaId);
     const rows = await this.db.query<{
       id: number; id_candidato: string; nome: string | null; data: string; tipo: string; hora: string | null; texto: string | null;
@@ -1347,7 +1425,8 @@ export class PortalDadosService {
         resposta: linha.resposta ?? "",
       })),
     ];
-    return todos.sort((a, b) => (a.situacao === "Pendente" ? 0 : 1) - (b.situacao === "Pendente" ? 0 : 1) || b.dataIso.localeCompare(a.dataIso));
+    // Usuário com acesso limitado só vê os pedidos dos colaboradores liberados para ele.
+    return todos.filter((pedido) => !permitidos || permitidos.has(pedido.id_candidato)).sort((a, b) => (a.situacao === "Pendente" ? 0 : 1) - (b.situacao === "Pendente" ? 0 : 1) || b.dataIso.localeCompare(a.dataIso));
   }
 
   /**
@@ -1355,7 +1434,7 @@ export class PortalDadosService {
    * saida vazias) e só com os horários corrigidos, marcada como tratada por quem aprovou: assim fica identificada como
    * marcação incluída, e o motivo, quem aprovou e quando ficam em ponto_inclusao (Portaria 671/2021).
    */
-  async responderInclusao(usuarioId: string, empresaId: string, id: number, aprovar: boolean, respostaInformada: string) {
+  async responderInclusao(usuarioId: string, empresaId: string, id: number, aprovar: boolean, respostaInformada: string, gestor: string | null = null) {
     await this.garantir(usuarioId, empresaId);
     const resposta = respostaInformada.trim().slice(0, 255);
     if (!aprovar && resposta.length < 3) {
@@ -1393,8 +1472,8 @@ export class PortalDadosService {
         ]);
       }
       await client.query(
-        "update dna_work.ponto_inclusao set aceite = $2, resposta = $3, id_ponto = $4, id_usuario = $5, respondido_em = now() where id = $1",
-        [id, aprovar ? 1 : 0, resposta || null, idPonto, usuarioId],
+        "update dna_work.ponto_inclusao set aceite = $2, resposta = $3, id_ponto = $4, id_usuario = $5, id_gestor = $6, respondido_em = now() where id = $1",
+        [id, aprovar ? 1 : 0, resposta || null, idPonto, usuarioId, gestor],
       );
       await client.query("commit");
       return { ok: true };
@@ -1410,7 +1489,7 @@ export class PortalDadosService {
    * Aprova ou recusa um pedido de ajuste. Aprovado, o horário vai para entrada_editado/saida_editado e a marcação
    * original fica guardada (Portaria 671/2021, o registro do relógio não pode ser alterado), como o sistema antigo faz.
    */
-  async responderSolicitacao(usuarioId: string, empresaId: string, id: number, aprovar: boolean, respostaInformada: string) {
+  async responderSolicitacao(usuarioId: string, empresaId: string, id: number, aprovar: boolean, respostaInformada: string, gestor: string | null = null) {
     await this.garantir(usuarioId, empresaId);
     const resposta = respostaInformada.trim().slice(0, 255);
     if (!aprovar && resposta.length < 3) {
@@ -1442,7 +1521,7 @@ export class PortalDadosService {
           where id = $1
         `, [pedido.id_ponto, hora, usuarioId, entrada && saida ? horasEntreRelogio(entrada, saida) : null]);
       }
-      await client.query("update dna_work.justificativa set aceite = $2, resposta = $3 where id = $1", [id, aprovar ? 1 : 0, resposta || null]);
+      await client.query("update dna_work.justificativa set aceite = $2, resposta = $3, id_gestor = $4 where id = $1", [id, aprovar ? 1 : 0, resposta || null, gestor]);
       await client.query("commit");
       return { ok: true };
     } catch (error) {
@@ -1453,7 +1532,7 @@ export class PortalDadosService {
     }
   }
 
-  async relatorioPonto(usuarioId: string, empresaId: string, deInformado?: string, ateInformado?: string) {
+  async relatorioPonto(usuarioId: string, empresaId: string, deInformado?: string, ateInformado?: string, permitidos: Set<string> | null = null) {
     await this.garantir(usuarioId, empresaId);
     const hoje = dataSp(0);
     const diaDaSemana = (new Date(`${hoje}T12:00:00Z`).getUTCDay() + 6) % 7;
@@ -1471,7 +1550,7 @@ export class PortalDadosService {
       where col.id_empresa = $1
         and (coalesce(col.status_colaborador, 1) = 1 or replace(col.data_desligamento, '/', '-') >= $2)
       order by col.id_candidato, case when col.status_colaborador = 1 then 0 else 1 end, col.data_cadastro desc nulls last
-    `, [empresaId, de])).rows;
+    `, [empresaId, de])).rows.filter((pessoa) => !permitidos || permitidos.has(pessoa.id_candidato));
     // Poucas consultas por vez, para não esgotar as conexões com empresas grandes.
     const linhas: Array<Record<string, unknown>> = [];
     for (let i = 0; i < pessoas.length; i += 6) {
@@ -1636,7 +1715,7 @@ export class PortalDadosService {
         where id_colaborador::text = any($1) and replace(data, '-', '/') = any($2::text[])
       `, [ids, chaves]),
       this.db.query<CargaBase>(`
-        select id, entrada, saida_refeicao, retorno_refeicao, saida, tolerancia, pausa from dna_work.ponto_carga_base where id_empresa = $1
+        select ${COLUNAS_CARGA} from dna_work.ponto_carga_base where id_empresa = $1
       `, [empresaId]),
       this.db.query<{ id: string; inicio: string; fim: string }>(
         "select id_colaborador::text as id, replace(inicio, '-', '/') as inicio, replace(fim, '-', '/') as fim from dna_work.ferias where id_colaborador::text = any($1)",
@@ -1740,6 +1819,7 @@ export class PortalDadosService {
         incompleta: !emAndamento && batidas.some((batida) => batida.entrada && !batida.saida),
         // Algum horário do dia foi corrigido ou incluído por pedido aprovado (o espelho precisa identificar isso).
         ajustado: batidas.some((batida) => batida.ajustada),
+        alertaAlmoco: alertaDoAlmoco(batidas),
         falta: situacao === "Faltou",
         atestado,
       };
@@ -2208,7 +2288,7 @@ export class PortalDadosService {
 
   private async detalheCarga(empresaId: string, id: string) {
     const rows = await this.db.query(`
-      select nome, tipo, entrada, saida_refeicao, retorno_refeicao, saida, tolerancia, pausa
+      select nome, tipo, entrada, saida_refeicao, retorno_refeicao, saida, tolerancia, pausa, refeicao_livre, refeicao_minutos
       from dna_work.ponto_carga_base
       where id::text = $1 and id_empresa = $2
     `, [id, empresaId]);
@@ -2216,7 +2296,9 @@ export class PortalDadosService {
     if (!linha) return null;
     return ficha(linha.nome, linha.tipo, [
       ["Nome", linha.nome], ["Tipo", linha.tipo], ["Entrada", linha.entrada],
-      ["Saída refeição", linha.saida_refeicao], ["Retorno refeição", linha.retorno_refeicao],
+      ...(Number(linha.refeicao_livre) === 1
+        ? [["Refeição", `Livre, ${duracao(Number(linha.refeicao_minutos))}`] as [string, unknown]]
+        : [["Saída refeição", linha.saida_refeicao], ["Retorno refeição", linha.retorno_refeicao]] as Array<[string, unknown]>),
       ["Saída", linha.saida], ["Tolerância", linha.tolerancia],
       ["Pausa", Number(linha.pausa) === 1 ? "Sim" : "Não"],
     ]);

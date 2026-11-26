@@ -130,6 +130,8 @@ const badgeStyles: Record<string, string> = {
   vencida: "bg-rose-50 text-rose-700",
   aprovada: "bg-emerald-50 text-emerald-800",
   recusada: "bg-rose-50 text-rose-700",
+  // Almoço a menos de 1 hora da entrada ou da saída: vermelho forte, para a empresa enxergar logo.
+  almoco: "bg-red-600 text-white",
   estagio: "bg-violet-50 text-violet-800",
   clt: "bg-sky-50 text-sky-800",
 };

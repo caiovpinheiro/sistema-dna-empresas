@@ -16,6 +16,7 @@ import { PortalEmpresaService, type SessaoEmpresa } from "./services/portal-empr
 import { PortalDadosService } from "./services/portal-dados.service.js";
 import { PontoColaboradorService } from "./services/ponto-colaborador.service.js";
 import { CadastroPublicoService } from "./services/cadastro-publico.service.js";
+import { EMPRESA, PermissoesPontoService as Perm, type Acesso, type Permissao } from "./services/permissoes-ponto.service.js";
 
 const COOKIE = "dnawork_empresa";
 const COOKIE_PONTO = "dnawork_ponto";
@@ -61,6 +62,7 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   const portal = new PortalEmpresaService(db);
   const dados = new PortalDadosService(db, { url: config.INTERNO_API_URL, token: config.SERVICE_TOKEN }, (mensagem, extra) => app.log.warn(extra ?? {}, mensagem));
   const ponto = new PontoColaboradorService(db);
+  const permissoes = new Perm(db);
   const cadastro = new CadastroPublicoService(db, {
     googleMapsKey: config.GOOGLE_MAPS_API_KEY,
     avisar: (mensagem, extra) => app.log.warn(extra ?? {}, mensagem),
@@ -107,11 +109,16 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
     }
   });
 
-  app.addHook("onRequest", async (request) => {
+  app.addHook("onRequest", async (request, reply) => {
     const url = request.url.split("?")[0];
     if (request.method === "OPTIONS" || url === "/health" || url === "/api/v1/empresa/login" || url === "/api/v1/ponto/login" || url === "/api/v1/servico/ping" || url === "/api/v1/servico/interno" || url.startsWith("/api/v1/publico/cadastro")) return;
     if (url.startsWith("/api/v1/ponto")) {
       await autenticarPonto(app, request);
+      // Desligado (ou tirado do ponto) perde o acesso na hora, mesmo com o login ainda aberto no celular.
+      if (!(await ponto.acessoAtivo(request.pontoColaborador!.sub))) {
+        reply.clearCookie(COOKIE_PONTO, { path: "/" });
+        throw new AppError(401, "ACESSO_ENCERRADO", "Seu acesso ao ponto foi encerrado. Fale com a empresa.");
+      }
       return;
     }
     if (url.startsWith("/api/")) {
@@ -121,6 +128,8 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
       }
     }
   });
+
+  const idDe = (request: FastifyRequest) => String((request.params as { id?: string }).id ?? "");
 
   app.get("/health", async () => ({ ok: true, servico: "empresas" }));
 
@@ -174,7 +183,7 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
 
   app.get("/api/v1/empresa/sessao", async (request) => {
     const sessao = await portal.sessao(request.user.sub, request.user.empresaId!);
-    return { success: true, data: sessao };
+    return { success: true, data: { ...sessao, acesso: Perm.resumo(EMPRESA) } };
   });
 
   app.post("/api/v1/empresa/sessao/empresa", async (request, reply) => {
@@ -216,96 +225,10 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
     const busca = ler(z.object({ q: z.string().optional() }), request.query).q?.trim() ?? "";
     return { success: true, data: await dados.contratados(request.user.sub, request.user.empresaId!, busca) };
   });
-  // Jornada de trabalho = dias de trabalho + horário de cada dia (escala e carga horária num cadastro só).
-  app.get("/api/v1/empresa/jornadas", async (request) => ({ success: true, data: await dados.jornadas(request.user.sub, request.user.empresaId!) }));
-  app.get("/api/v1/empresa/jornadas/:id", async (request) => {
-    const { id } = request.params as { id: string };
-    return { success: true, data: await dados.jornada(request.user.sub, request.user.empresaId!, id) };
-  });
-  app.post("/api/v1/empresa/jornadas", async (request) => ({ success: true, data: await dados.salvarJornadaEmpresa(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
-  app.put("/api/v1/empresa/jornadas/:id", async (request) => {
-    const { id } = request.params as { id: string };
-    return { success: true, data: await dados.salvarJornadaEmpresa(request.user.sub, request.user.empresaId!, corpo(request.body), id) };
-  });
-  app.delete("/api/v1/empresa/jornadas/:id", async (request) => {
-    const { id } = request.params as { id: string };
-    return { success: true, data: await dados.excluirJornada(request.user.sub, request.user.empresaId!, id) };
-  });
-  app.get("/api/v1/empresa/ponto/solicitacoes", async (request) => {
-    const { situacao } = ler(z.object({ situacao: z.enum(["pendentes", "todas"]).optional() }), request.query);
-    return { success: true, data: await dados.solicitacoesPonto(request.user.sub, request.user.empresaId!, situacao ?? "pendentes") };
-  });
-  app.post("/api/v1/empresa/ponto/solicitacoes/:id", async (request) => {
-    const { id } = ler(z.object({ id: z.coerce.number().int().positive() }), request.params);
-    const body = ler(z.object({ aprovar: z.boolean(), resposta: z.string().max(255).optional() }), request.body);
-    return { success: true, data: await dados.responderSolicitacao(request.user.sub, request.user.empresaId!, id, body.aprovar, body.resposta ?? "") };
-  });
-  app.post("/api/v1/empresa/ponto/inclusoes/:id", async (request) => {
-    const { id } = ler(z.object({ id: z.coerce.number().int().positive() }), request.params);
-    const body = ler(z.object({ aprovar: z.boolean(), resposta: z.string().max(255).optional() }), request.body);
-    return { success: true, data: await dados.responderInclusao(request.user.sub, request.user.empresaId!, id, body.aprovar, body.resposta ?? "") };
-  });
-  app.get("/api/v1/empresa/ponto/relatorio", async (request) => {
-    const periodo = ler(z.object({ de: z.string().optional(), ate: z.string().optional() }), request.query);
-    return { success: true, data: await dados.relatorioPonto(request.user.sub, request.user.empresaId!, periodo.de, periodo.ate) };
-  });
-  // Configuração do ponto de uma pessoa (:id = id_candidato, o mesmo da tela do relatório).
-  app.get("/api/v1/empresa/ponto/colaborador/:id/configuracao", async (request) => {
-    const { id } = request.params as { id: string };
-    return { success: true, data: await dados.configuracaoPonto(request.user.sub, request.user.empresaId!, id) };
-  });
-  app.post("/api/v1/empresa/ponto/colaborador/:id/jornada", async (request) => {
-    const { id } = request.params as { id: string };
-    return { success: true, data: await dados.salvarJornada(request.user.sub, request.user.empresaId!, id, corpo(request.body)) };
-  });
-  // "Apagar" na tela = desligar: os registros de ponto ficam guardados (obrigação legal da empresa).
-  app.post("/api/v1/empresa/ponto/colaborador/:id/senha", async (request) => {
-    const { id } = request.params as { id: string };
-    const body = ler(z.object({ senha: z.string().max(200) }), request.body);
-    return { success: true, data: await dados.redefinirSenhaColaborador(request.user.sub, request.user.empresaId!, id, body.senha) };
-  });
-  app.post("/api/v1/empresa/ponto/colaborador/:id/desligar", async (request) => {
-    const { id } = request.params as { id: string };
-    const body = ler(z.object({ ultimoDia: z.string().optional() }), request.body ?? {});
-    return { success: true, data: await dados.desligarColaborador(request.user.sub, request.user.empresaId!, id, body.ultimoDia) };
-  });
-  app.post("/api/v1/empresa/ponto/colaborador/:id/ferias", async (request) => {
-    const { id } = request.params as { id: string };
-    return { success: true, data: await dados.salvarFerias(request.user.sub, request.user.empresaId!, id, corpo(request.body)) };
-  });
-  app.delete("/api/v1/empresa/ponto/colaborador/:id/ferias/:ferias", async (request) => {
-    const { id, ferias } = request.params as { id: string; ferias: string };
-    return { success: true, data: await dados.excluirFerias(request.user.sub, request.user.empresaId!, id, ferias) };
-  });
-  app.get("/api/v1/empresa/ponto/colaboradores", async (request) => {
-    const query = ler(z.object({
-      q: z.string().optional(),
-      status: z.enum(["ativo", "inativo", "todos"]).optional(),
-    }), request.query);
-    return {
-      success: true,
-      data: await dados.colaboradoresPonto(request.user.sub, request.user.empresaId!, query.q?.trim() ?? "", query.status ?? "todos"),
-    };
-  });
   app.get("/api/v1/empresa/detalhe/:tipo/:id", async (request) => {
     const { tipo, id } = request.params as { tipo: string; id: string };
     return { success: true, data: await dados.detalhe(request.user.sub, request.user.empresaId!, tipo, id) };
   });
-  app.get("/api/v1/empresa/ponto/colaborador/:id", async (request) => {
-    const periodo = ler(z.object({ de: z.string().optional(), ate: z.string().optional() }), request.query);
-    const id = (request.params as { id: string }).id;
-    return { success: true, data: await dados.relatorioPontoColaborador(request.user.sub, request.user.empresaId!, id, periodo.de, periodo.ate) };
-  });
-  app.get("/api/v1/empresa/feriados", async (request) => {
-    const { ano } = request.query as { ano?: string };
-    return { success: true, data: await dados.feriados(request.user.sub, request.user.empresaId!, ano) };
-  });
-  app.delete("/api/v1/empresa/feriados/:id", async (request) => {
-    const { id } = request.params as { id: string };
-    return { success: true, data: await dados.excluirFeriado(request.user.sub, request.user.empresaId!, id) };
-  });
-  app.post("/api/v1/empresa/feriados", async (request) => ({ success: true, data: await dados.salvarFeriado(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
-  app.post("/api/v1/empresa/colaboradores", async (request) => ({ success: true, data: await dados.salvarColaborador(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
   app.post("/api/v1/empresa/vagas", async (request) => ({ success: true, data: await dados.salvarVaga(request.user.sub, request.user.empresaId!, corpo(request.body), request.user.email) }));
   app.post("/api/v1/empresa/vagas/:id/cancelar", async (request) => {
     const { id } = request.params as { id: string };
@@ -314,7 +237,15 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   app.get("/api/v1/empresa/empresa", async (request) => ({ success: true, data: await dados.empresa(request.user.sub, request.user.empresaId!) }));
   app.post("/api/v1/empresa/filiais", async (request) => ({ success: true, data: await dados.salvarFilial(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
   app.get("/api/v1/empresa/usuarios", async (request) => ({ success: true, data: await dados.usuarios(request.user.sub, request.user.empresaId!) }));
-  app.post("/api/v1/empresa/usuarios", async (request) => ({ success: true, data: await dados.salvarUsuario(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
+  // O acesso da empresa ao portal é um só: não se cria outro usuário. Quem ajuda no ponto recebe permissões no app do ponto.
+  app.post("/api/v1/empresa/usuarios", async () => {
+    throw new AppError(403, "ACESSO_UNICO", "O acesso da empresa ao portal é único. Para alguém ajudar no ponto, dê permissões ao colaborador em Ponto › Permissões.");
+  });
+  // Permissões que a empresa dá aos colaboradores para cuidarem do ponto de outros pelo app do ponto.
+  app.get("/api/v1/empresa/ponto/permissoes", async (request) => ({ success: true, data: await permissoes.lista(request.user.empresaId!) }));
+  app.get("/api/v1/empresa/ponto/permissoes/:id", async (request) => ({ success: true, data: await permissoes.configuracao(request.user.empresaId!, idDe(request)) }));
+  app.put("/api/v1/empresa/ponto/permissoes/:id", async (request) => ({ success: true, data: await permissoes.salvar(request.user.empresaId!, idDe(request), request.body) }));
+
   app.get("/api/v1/empresa/talentos", async (request) => ({ success: true, data: await dados.talentos(request.user.sub, request.user.empresaId!) }));
   app.post("/api/v1/empresa/talentos", async (request) => ({ success: true, data: await dados.salvarTalento(request.user.sub, request.user.empresaId!, corpo(request.body)) }));
   app.get("/api/v1/empresa/encaminhamentos", async (request) => ({ success: true, data: await dados.encaminhamentos(request.user.sub, request.user.empresaId!) }));
@@ -326,6 +257,135 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   app.get("/api/v1/empresa/faturas", async (request) => {
     const situacao = ler(z.object({ situacao: z.enum(["aberta", "paga", "todas"]).optional() }), request.query).situacao ?? "aberta";
     return { success: true, data: await dados.faturas(request.user.sub, request.user.empresaId!, situacao) };
+  });
+
+  /**
+   * Rotas do ponto que valem para dois públicos:
+   * - /api/v1/empresa/...: a empresa (login do portal), que vê e faz tudo;
+   * - /api/v1/ponto/gestao/...: o colaborador com permissões, pelo app do ponto, só no que a empresa liberou e só para os
+   *   colaboradores escolhidos. Quem não está liberado para ele não aparece (404, como se não existisse).
+   * As funções do portal conferem a empresa pelo login dela; quando quem age é o colaborador, ele fica gravado em id_gestor.
+   */
+  type Contexto = { usuarioId: string; empresaId: string; acesso: Acesso };
+  const daEmpresa = async (request: FastifyRequest): Promise<Contexto> => ({ usuarioId: request.user.sub, empresaId: request.user.empresaId!, acesso: EMPRESA });
+  const doGestor = async (request: FastifyRequest): Promise<Contexto> => {
+    const gestor = await permissoes.gestor(request.pontoColaborador!.sub);
+    if (!gestor || !gestor.acesso.permissoes.size || !gestor.usuarioEmpresa) {
+      throw new AppError(403, "SEM_PERMISSAO", "Você não tem permissão para cuidar do ponto de outros colaboradores.");
+    }
+    return { usuarioId: gestor.usuarioEmpresa, empresaId: gestor.empresaId, acesso: gestor.acesso };
+  };
+  type Guarda = (request: FastifyRequest, c: Contexto) => Promise<void> | void;
+  const rotaDoPonto = (metodo: "GET" | "POST" | "PUT" | "DELETE", caminho: string, guarda: Guarda, executar: (request: FastifyRequest, c: Contexto) => Promise<unknown>) => {
+    for (const [base, contexto] of [["/api/v1/empresa", daEmpresa], ["/api/v1/ponto/gestao", doGestor]] as const) {
+      app.route({
+        method: metodo,
+        url: base + caminho,
+        handler: async (request) => {
+          const c = await contexto(request);
+          if (c.acesso.limitado) await guarda(request, c);
+          return { success: true, data: await executar(request, c) };
+        },
+      });
+    }
+  };
+  const qualquer = (c: Contexto, lista: Permissao[]) => {
+    if (!lista.some((permissao) => Perm.tem(c.acesso, permissao))) Perm.exigir(c.acesso, lista[0]);
+  };
+  const noAlcance = (request: FastifyRequest, c: Contexto, lista: Permissao[]) => {
+    const alcance = Perm.alcanceDeQualquer(c.acesso, lista);
+    if (alcance && !alcance.has(idDe(request))) throw new AppError(404, "COLABORADOR_NAO_ENCONTRADO", "Colaborador não encontrado.");
+  };
+  const cadastroDe: Guarda = (request, c) => {
+    Perm.exigir(c.acesso, "cadastro", idDe(request));
+    Perm.naoEhOProprio(c.acesso, idDe(request));
+  };
+  const gestorDe = (c: Contexto) => (c.acesso.limitado ? c.acesso.eu : null);
+
+  app.get("/api/v1/ponto/gestao/sessao", async (request) => {
+    const gestor = await permissoes.gestor(request.pontoColaborador!.sub);
+    const acesso = gestor?.acesso ?? { limitado: true, eu: "", permissoes: new Map() };
+    return { success: true, data: { acesso: Perm.resumo(acesso), abas: Perm.abas(acesso) } };
+  });
+
+  // Jornada de trabalho = dias de trabalho + horário de cada dia (escala e carga horária num cadastro só).
+  const verAlgo: Guarda = (_r, c) => qualquer(c, ["ver", "cadastro", "empresa"]);
+  const soEmpresa: Guarda = (_r, c) => Perm.exigir(c.acesso, "empresa");
+  rotaDoPonto("GET", "/jornadas", verAlgo, (_r, c) => dados.jornadas(c.usuarioId, c.empresaId));
+  rotaDoPonto("GET", "/jornadas/:id", verAlgo, (r, c) => dados.jornada(c.usuarioId, c.empresaId, idDe(r)));
+  rotaDoPonto("POST", "/jornadas", soEmpresa, (r, c) => dados.salvarJornadaEmpresa(c.usuarioId, c.empresaId, corpo(r.body)));
+  rotaDoPonto("PUT", "/jornadas/:id", soEmpresa, (r, c) => dados.salvarJornadaEmpresa(c.usuarioId, c.empresaId, corpo(r.body), idDe(r)));
+  rotaDoPonto("DELETE", "/jornadas/:id", soEmpresa, (r, c) => dados.excluirJornada(c.usuarioId, c.empresaId, idDe(r)));
+  rotaDoPonto("GET", "/feriados", verAlgo, (r, c) => dados.feriados(c.usuarioId, c.empresaId, (r.query as { ano?: string }).ano));
+  rotaDoPonto("POST", "/feriados", soEmpresa, (r, c) => dados.salvarFeriado(c.usuarioId, c.empresaId, corpo(r.body)));
+  rotaDoPonto("DELETE", "/feriados/:id", soEmpresa, (r, c) => dados.excluirFeriado(c.usuarioId, c.empresaId, idDe(r)));
+
+  rotaDoPonto("GET", "/ponto/solicitacoes", (_r, c) => Perm.exigir(c.acesso, "solicitacoes"), async (r, c) => {
+    const { situacao } = ler(z.object({ situacao: z.enum(["pendentes", "todas"]).optional() }), r.query);
+    const lista = await dados.solicitacoesPonto(c.usuarioId, c.empresaId, situacao ?? "pendentes", Perm.alcance(c.acesso, "solicitacoes"));
+    // Os pedidos do próprio colaborador não aparecem para ele aprovar: vão para a empresa.
+    return c.acesso.limitado ? lista.filter((pedido) => String(pedido.id_candidato) !== c.acesso.eu) : lista;
+  });
+  const resposta = z.object({ aprovar: z.boolean(), resposta: z.string().max(255).optional() });
+  const idNumero = z.object({ id: z.coerce.number().int().positive() });
+  rotaDoPonto("POST", "/ponto/solicitacoes/:id", async (r, c) => {
+    const candidato = await permissoes.candidatoDoAjuste(Number(idDe(r)), c.empresaId);
+    Perm.exigir(c.acesso, "solicitacoes", candidato);
+    Perm.naoEhOProprio(c.acesso, candidato);
+  }, (r, c) => {
+    const { id } = ler(idNumero, r.params);
+    const body = ler(resposta, r.body);
+    return dados.responderSolicitacao(c.usuarioId, c.empresaId, id, body.aprovar, body.resposta ?? "", gestorDe(c));
+  });
+  rotaDoPonto("POST", "/ponto/inclusoes/:id", async (r, c) => {
+    const candidato = await permissoes.candidatoDaInclusao(Number(idDe(r)), c.empresaId);
+    Perm.exigir(c.acesso, "solicitacoes", candidato);
+    Perm.naoEhOProprio(c.acesso, candidato);
+  }, (r, c) => {
+    const { id } = ler(idNumero, r.params);
+    const body = ler(resposta, r.body);
+    return dados.responderInclusao(c.usuarioId, c.empresaId, id, body.aprovar, body.resposta ?? "", gestorDe(c));
+  });
+  rotaDoPonto("GET", "/ponto/relatorio", (_r, c) => Perm.exigir(c.acesso, "ver"), (r, c) => {
+    const periodo = ler(z.object({ de: z.string().optional(), ate: z.string().optional() }), r.query);
+    return dados.relatorioPonto(c.usuarioId, c.empresaId, periodo.de, periodo.ate, Perm.alcance(c.acesso, "ver"));
+  });
+  // Configuração do ponto de uma pessoa (:id = id_candidato, o mesmo da tela do relatório).
+  rotaDoPonto("GET", "/ponto/colaborador/:id/configuracao", (r, c) => { qualquer(c, ["ver", "cadastro", "empresa"]); noAlcance(r, c, ["ver", "cadastro", "empresa"]); },
+    (r, c) => dados.configuracaoPonto(c.usuarioId, c.empresaId, idDe(r)));
+  rotaDoPonto("POST", "/ponto/colaborador/:id/jornada", cadastroDe, (r, c) => dados.salvarJornada(c.usuarioId, c.empresaId, idDe(r), corpo(r.body)));
+  rotaDoPonto("POST", "/ponto/colaborador/:id/senha", cadastroDe, (r, c) => {
+    const body = ler(z.object({ senha: z.string().max(200) }), r.body);
+    return dados.redefinirSenhaColaborador(c.usuarioId, c.empresaId, idDe(r), body.senha);
+  });
+  // "Apagar" na tela = desligar: os registros de ponto ficam guardados (obrigação legal da empresa).
+  rotaDoPonto("POST", "/ponto/colaborador/:id/desligar", cadastroDe, (r, c) => {
+    const body = ler(z.object({ ultimoDia: z.string().optional() }), r.body ?? {});
+    return dados.desligarColaborador(c.usuarioId, c.empresaId, idDe(r), body.ultimoDia);
+  });
+  const feriasDe: Guarda = (r, c) => Perm.exigir(c.acesso, "empresa", idDe(r));
+  rotaDoPonto("POST", "/ponto/colaborador/:id/ferias", feriasDe, (r, c) => dados.salvarFerias(c.usuarioId, c.empresaId, idDe(r), corpo(r.body)));
+  rotaDoPonto("DELETE", "/ponto/colaborador/:id/ferias/:ferias", feriasDe, (r, c) => dados.excluirFerias(c.usuarioId, c.empresaId, idDe(r), String((r.params as { ferias: string }).ferias)));
+  rotaDoPonto("GET", "/ponto/colaboradores", (_r, c) => qualquer(c, ["ver", "cadastro", "empresa"]), (r, c) => {
+    const query = ler(z.object({ q: z.string().optional(), status: z.enum(["ativo", "inativo", "todos"]).optional() }), r.query);
+    return dados.colaboradoresPonto(c.usuarioId, c.empresaId, query.q?.trim() ?? "", query.status ?? "todos", Perm.alcanceDeQualquer(c.acesso, ["ver", "cadastro", "empresa"]));
+  });
+  rotaDoPonto("GET", "/ponto/colaborador/:id", (r, c) => { qualquer(c, ["ver", "cadastro", "empresa"]); noAlcance(r, c, ["ver", "cadastro", "empresa"]); }, async (r, c) => {
+    const periodo = ler(z.object({ de: z.string().optional(), ate: z.string().optional() }), r.query);
+    const id = idDe(r);
+    const relatorio = await dados.relatorioPontoColaborador(c.usuarioId, c.empresaId, id, periodo.de, periodo.ate);
+    // Só com "cadastro" (sem "ver"): abre a ficha para cadastrar e configurar, mas sem as batidas e o saldo.
+    const alcanceVer = Perm.alcance(c.acesso, "ver");
+    const podeVer = Perm.tem(c.acesso, "ver") && (!alcanceVer || alcanceVer.has(id));
+    if (!podeVer) return { ...relatorio, dias: [], periodo: null, periodoAnterior: null, total: null, semPermissaoVer: true };
+    return relatorio;
+  });
+  rotaDoPonto("POST", "/colaboradores", (_r, c) => Perm.exigir(c.acesso, "cadastro"), async (r, c) => {
+    const salvo = await dados.salvarColaborador(c.usuarioId, c.empresaId, corpo(r.body));
+    // Colaborador com permissão passa a enxergar quem ele acabou de cadastrar.
+    const idCandidato = c.acesso.limitado ? await permissoes.candidatoDoColaborador(String(salvo.id)) : null;
+    if (idCandidato) await permissoes.incluirNoAlcance(c.empresaId, c.acesso, idCandidato);
+    return salvo;
   });
 
   app.post("/api/v1/ponto/login", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {

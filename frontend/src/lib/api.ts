@@ -13,7 +13,17 @@ export class ApiError extends Error {
 
 export type Envelope<T> = { success: boolean; data: T };
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<Envelope<T>> {
+/**
+ * Gestão do ponto pelo app do colaborador: as mesmas telas do portal da empresa, mas cada chamada vai para
+ * /api/v1/ponto/gestao, onde o servidor só libera o que a empresa deu de permissão a esse colaborador.
+ */
+let gestaoDoPonto = false;
+export function usarGestaoDoPonto() {
+  gestaoDoPonto = true;
+}
+
+export async function api<T>(caminho: string, init: RequestInit = {}): Promise<Envelope<T>> {
+  const path = gestaoDoPonto && caminho.startsWith("/api/v1/empresa/") ? `/api/v1/ponto/gestao/${caminho.slice("/api/v1/empresa/".length)}` : caminho;
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...init, headers, credentials: "include" });
