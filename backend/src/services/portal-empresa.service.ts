@@ -55,6 +55,25 @@ export class PortalEmpresaService {
     throw new AppError(401, "CREDENCIAIS_INVALIDAS", "E-mail ou senha inválidos.");
   }
 
+  /** Marca curta da senha atual (vai no token): se a senha mudar, as sessões abertas antes param de valer. */
+  async marcaDaSenha(usuarioId: string): Promise<string> {
+    const linha = await this.db.query<{ sv: string }>(
+      "select left(md5(coalesce(senha_hash, '') || coalesce(senha_u, '')), 16) as sv from dna_work.usuario_empresa where id_u = $1",
+      [usuarioId],
+    );
+    return linha.rows[0]?.sv ?? "";
+  }
+
+  /** Login ainda ativo e com a mesma senha de quando a sessão foi aberta (token antigo, sem marca, só confere o ativo). */
+  async sessaoValida(usuarioId: string, marca: string | undefined): Promise<boolean> {
+    const linha = await this.db.query(`
+      select 1 from dna_work.usuario_empresa
+      where id_u = $1 and status = 1
+        and ($2::text is null or left(md5(coalesce(senha_hash, '') || coalesce(senha_u, '')), 16) = $2)
+    `, [usuarioId, marca ?? null]);
+    return Boolean(linha.rowCount);
+  }
+
   async sessao(usuarioId: string, empresaId: string): Promise<SessaoEmpresa> {
     const usuario = await this.buscarPorId(usuarioId);
     return this.montarSessao(usuario, empresaId);

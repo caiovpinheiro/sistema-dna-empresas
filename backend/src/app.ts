@@ -5,6 +5,7 @@ import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Pool } from "pg";
@@ -27,6 +28,11 @@ type EmpresaToken = {
   role: "empresa";
   nome?: string;
   empresaId?: string;
+  /** Id da sessão: o Sair grava ele como encerrado. */
+  jti?: string;
+  /** Marca da senha atual: trocou a senha, as sessões abertas antes param de valer. */
+  sv?: string;
+  exp?: number;
 };
 
 declare module "@fastify/jwt" {
@@ -41,6 +47,9 @@ type PontoToken = {
   role: "ponto";
   nome: string;
   empresaId: string;
+  jti?: string;
+  sv?: string;
+  exp?: number;
 };
 
 declare module "fastify" {
@@ -114,8 +123,10 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
     if (request.method === "OPTIONS" || url === "/health" || url === "/api/v1/empresa/login" || url === "/api/v1/ponto/login" || url === "/api/v1/servico/ping" || url === "/api/v1/servico/interno" || url.startsWith("/api/v1/publico/cadastro")) return;
     if (url.startsWith("/api/v1/ponto")) {
       await autenticarPonto(app, request);
-      // Desligado (ou tirado do ponto) perde o acesso na hora, mesmo com o login ainda aberto no celular.
-      if (!(await ponto.acessoAtivo(request.pontoColaborador!.sub))) {
+      await conferirSessao(request.pontoColaborador!.jti);
+      // Desligado (ou tirado do ponto) perde o acesso na hora, mesmo com o login ainda aberto no celular. Senha trocada
+      // (por ele ou pela empresa) também derruba as sessões abertas antes da troca.
+      if (!(await ponto.acessoAtivo(request.pontoColaborador!.sub, request.pontoColaborador!.sv))) {
         reply.clearCookie(COOKIE_PONTO, { path: "/" });
         throw new AppError(401, "ACESSO_ENCERRADO", "Seu acesso ao ponto foi encerrado. Fale com a empresa.");
       }
@@ -123,6 +134,11 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
     }
     if (url.startsWith("/api/")) {
       await app.authenticate(request);
+      await conferirSessao(request.user.jti);
+      if (!(await portal.sessaoValida(request.user.sub, request.user.sv))) {
+        reply.clearCookie(COOKIE, { path: "/" });
+        throw new AppError(401, "SESSAO_ENCERRADA", "Sua sessão foi encerrada. Entre de novo.");
+      }
       if (request.user.empresaId) {
         await portal.registrarAcesso([request.user.empresaId], request.user.sub, request.user.email, false);
       }
@@ -130,6 +146,23 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   });
 
   const idDe = (request: FastifyRequest) => String((request.params as { id?: string }).id ?? "");
+
+  const conferirSessao = async (jti: string | undefined) => {
+    if (!jti) return;
+    const revogada = await db.query("select 1 from dna_work.portal_sessao_revogada where jti = $1", [jti]);
+    if (revogada.rowCount) throw new AppError(401, "SESSAO_ENCERRADA", "Sua sessão foi encerrada. Entre de novo.");
+  };
+  const encerrarSessao = async (jti: string | undefined, exp: number | undefined) => {
+    if (!jti) return;
+    await db.query(
+      "insert into dna_work.portal_sessao_revogada (jti, expira) values ($1, to_timestamp($2)) on conflict (jti) do nothing",
+      [jti, exp ?? Math.floor(Date.now() / 1000) + 8 * 3600],
+    );
+  };
+  const tokenEmpresa = async (sessao: SessaoEmpresa) =>
+    app.jwt.sign({ ...payloadDe(sessao), jti: randomUUID(), sv: await portal.marcaDaSenha(sessao.id) });
+  const tokenPonto = async (pessoa: { id_colaborador: string; nome: string; id_empresa: string }) =>
+    app.jwt.sign({ sub: pessoa.id_colaborador, role: "ponto", nome: pessoa.nome, empresaId: pessoa.id_empresa, jti: randomUUID(), sv: await ponto.marcaDaSenha(pessoa.id_colaborador) } as unknown as EmpresaToken);
 
   app.get("/health", async () => ({ ok: true, servico: "empresas" }));
 
@@ -171,12 +204,13 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   app.post("/api/v1/empresa/login", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
     const body = ler(z.object({ email: z.string().trim().min(3), password: z.string().min(1).max(200) }), request.body);
     const sessao = await portal.login(body.email.trim(), body.password);
-    const token = await reply.jwtSign(payloadDe(sessao));
+    const token = await tokenEmpresa(sessao);
     reply.setCookie(COOKIE, token, cookieOptions(config));
     return { success: true, data: sessao };
   });
 
-  app.post("/api/v1/empresa/logout", async (_request, reply) => {
+  app.post("/api/v1/empresa/logout", async (request, reply) => {
+    await encerrarSessao(request.user.jti, request.user.exp);
     reply.clearCookie(COOKIE, { path: "/" });
     return { success: true, data: { ok: true } };
   });
@@ -189,15 +223,18 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   app.post("/api/v1/empresa/sessao/empresa", async (request, reply) => {
     const body = ler(z.object({ empresaId: z.string().trim().min(1) }), request.body);
     const sessao = await portal.trocarEmpresa(request.user.sub, body.empresaId);
-    const token = await reply.jwtSign(payloadDe(sessao));
+    await encerrarSessao(request.user.jti, request.user.exp);
+    const token = await tokenEmpresa(sessao);
     reply.setCookie(COOKIE, token, cookieOptions(config));
     return { success: true, data: sessao };
   });
 
-  app.post("/api/v1/empresa/senha", async (request) => {
+  app.post("/api/v1/empresa/senha", async (request, reply) => {
     const body = ler(z.object({ password: z.string().min(6).max(200), senhaAtual: z.string().max(200).optional() }), request.body);
     await portal.trocarSenha(request.user.sub, body.password, body.senhaAtual);
     const sessao = await portal.sessao(request.user.sub, request.user.empresaId!);
+    // A troca derruba as outras sessões abertas; esta continua com um token novo.
+    reply.setCookie(COOKIE, await tokenEmpresa(sessao), cookieOptions(config));
     return { success: true, data: sessao };
   });
 
@@ -391,11 +428,12 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
   app.post("/api/v1/ponto/login", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
     const body = ler(z.object({ cpf: z.string().trim().min(11), password: z.string().min(1).max(200) }), request.body);
     const pessoa = await ponto.login(body.cpf, body.password);
-    const token = app.jwt.sign({ sub: pessoa.id_colaborador, role: "ponto", nome: pessoa.nome, empresaId: pessoa.id_empresa } as unknown as EmpresaToken);
+    const token = await tokenPonto(pessoa);
     reply.setCookie(COOKIE_PONTO, token, cookieOptions(config));
     return { success: true, data: { nome: pessoa.nome, empresa: pessoa.empresa } };
   });
-  app.post("/api/v1/ponto/logout", async (_request, reply) => {
+  app.post("/api/v1/ponto/logout", async (request, reply) => {
+    await encerrarSessao(request.pontoColaborador?.jti, request.pontoColaborador?.exp);
     reply.clearCookie(COOKIE_PONTO, { path: "/" });
     return { success: true, data: { ok: true } };
   });
@@ -415,9 +453,13 @@ export async function buildEmpresaApp(config: EmpresaConfig, db: Pool): Promise<
       data: await ponto.bater(request.pontoColaborador!.sub, body.confirmar === true, body.latitude ?? null, body.longitude ?? null, dispositivo),
     };
   });
-  app.post("/api/v1/ponto/senha", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request) => {
+  app.post("/api/v1/ponto/senha", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
     const body = ler(z.object({ senhaAtual: z.string().min(1).max(200), senhaNova: z.string().min(1).max(200) }), request.body);
-    return { success: true, data: await ponto.trocarSenha(request.pontoColaborador!.sub, body.senhaAtual, body.senhaNova) };
+    const resultado = await ponto.trocarSenha(request.pontoColaborador!.sub, body.senhaAtual, body.senhaNova);
+    // A troca derruba as outras sessões abertas (outro celular); esta continua com um token novo.
+    const atual = request.pontoColaborador!;
+    reply.setCookie(COOKIE_PONTO, await tokenPonto({ id_colaborador: atual.sub, nome: atual.nome, id_empresa: atual.empresaId }), cookieOptions(config));
+    return { success: true, data: resultado };
   });
   app.get("/api/v1/ponto/solicitacoes", async (request) => ({
     success: true,

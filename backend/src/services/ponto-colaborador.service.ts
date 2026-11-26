@@ -1,5 +1,9 @@
+import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
+
+type Consulta = Pick<Pool, "query"> | PoolClient;
 import { AppError } from "../lib/errors.js";
+import { dataIsoValida, proximoId } from "../lib/validacao.js";
 import { SENHA_MINIMA, gravarSenha, guardarHash, senhaConfere } from "../lib/senha-colaborador.js";
 
 export type SessaoPonto = {
@@ -40,33 +44,69 @@ function noDia(hora: string) {
   return (h || 0) * 3600 + (m || 0) * 60 + (s || 0);
 }
 
+/** Mais longo que isso, um período que passa da meia-noite é quase sempre saída digitada antes da entrada. */
+const MAXIMO_VIRANDO_A_NOITE = 12 * 3600;
+/** Nenhuma marcação contínua (entrada até a saída) passa disso. */
+const MAXIMO_DO_PERIODO = 16 * 3600;
+
 /**
- * Recusa um período que se sobrepõe a uma batida do dia ou a outra inclusão ainda pendente. Saída menor que a
- * entrada = passou da meia-noite.
+ * Confere um par entrada/saída. Saída menor que a entrada = passou da meia-noite, o que só é aceito até 12 horas
+ * (ex.: 22:00 às 06:00). Assim "entrada 16:10, saída 07:00" não vira 15 horas de trabalho.
  */
-export async function conferirSobreposicao(db: { query: PoolClient["query"] }, idColaborador: string, data: string, entrada: string, saida: string) {
-  const intervalo = (de: string, ate: string | null) => {
-    const inicio = noDia(de);
+export function conferirPar(entrada: string | null, saida: string | null, campo: "entrada" | "saida" | "hora" = "saida") {
+  if (!entrada || !saida) return;
+  const inicio = noDia(entrada);
+  const fim = noDia(saida);
+  const virou = fim <= inicio;
+  const duracao = virou ? fim + 86_400 - inicio : fim - inicio;
+  if (virou && duracao > MAXIMO_VIRANDO_A_NOITE) {
+    const mensagem = "A saída ficou antes da entrada. Confira os horários (um período que passa da meia-noite pode ter no máximo 12 horas).";
+    throw new AppError(422, "SAIDA_ANTES_DA_ENTRADA", mensagem, { [campo]: "Saída antes da entrada." });
+  }
+  if (duracao > MAXIMO_DO_PERIODO) {
+    throw new AppError(422, "PERIODO_LONGO", "Um período de trabalho sem saída não pode passar de 16 horas. Confira os horários.", { [campo]: "Período longo demais." });
+  }
+}
+
+/** "YYYY/MM/DD" somado de n dias. */
+function outroDia(data: string, dias: number) {
+  const [a, m, d] = data.split("/").map(Number);
+  const dia = new Date(Date.UTC(a, m - 1, d + dias));
+  return `${dia.getUTCFullYear()}/${String(dia.getUTCMonth() + 1).padStart(2, "0")}/${String(dia.getUTCDate()).padStart(2, "0")}`;
+}
+
+/**
+ * Recusa um período que se sobrepõe a uma batida ou a uma inclusão pendente. Olha também o dia anterior e o
+ * seguinte, porque um período que passa da meia-noite entra no outro dia. Saída menor que a entrada = passou da
+ * meia-noite. `ignorarPonto`: a própria batida que está sendo ajustada.
+ */
+export async function conferirSobreposicao(db: { query: PoolClient["query"] }, idColaborador: string, data: string, entrada: string, saida: string, ignorarPonto: number | null = null) {
+  const ontem = outroDia(data, -1);
+  const amanha = outroDia(data, 1);
+  const deslocamento = (dia: string) => (dia === ontem ? -86_400 : dia === amanha ? 86_400 : 0);
+  const intervalo = (dia: string, de: string, ate: string | null) => {
+    const inicio = noDia(de) + deslocamento(dia);
     if (!ate) return [inicio, inicio] as const;
-    const fim = noDia(ate);
+    const fim = noDia(ate) + deslocamento(dia);
     return [inicio, fim > inicio ? fim : fim + 86_400] as const;
   };
-  const novo = intervalo(entrada, saida);
-  const existentes = await db.query<{ entrada: string | null; saida: string | null; origem: string }>(`
-    select ${ENTRADA} as entrada, ${SAIDA} as saida, 'batida' as origem
+  const novo = intervalo(data, entrada, saida);
+  const existentes = await db.query<{ data: string; entrada: string | null; saida: string | null; origem: string }>(`
+    select t.data, ${ENTRADA} as entrada, ${SAIDA} as saida, 'batida' as origem
     from dna_work.tabela_ponto t
-    where t.id_colaborador = $1 and t.data = $2 and coalesce(t.excluido, 0) = 0
+    where t.id_colaborador = $1 and t.data = any($2::text[]) and coalesce(t.excluido, 0) = 0 and ($3::int is null or t.id <> $3)
     union all
-    select entrada, saida, 'pedido' from dna_work.ponto_inclusao where id_colaborador = $1 and data = $2 and aceite is null
-  `, [idColaborador, data]);
+    select data, entrada, saida, 'pedido' from dna_work.ponto_inclusao where id_colaborador = $1 and data = any($2::text[]) and aceite is null
+  `, [idColaborador, [ontem, data, amanha], ignorarPonto]);
   for (const linha of existentes.rows) {
     if (!linha.entrada) continue;
-    const [inicio, fim] = intervalo(linha.entrada, linha.saida);
-    if (novo[0] <= fim && inicio <= novo[1]) {
-      const quando = `${linha.entrada.slice(0, 5)}${linha.saida ? ` às ${linha.saida.slice(0, 5)}` : ""}`;
+    const [inicio, fim] = intervalo(linha.data, linha.entrada, linha.saida);
+    // Encostar (uma termina às 12:00 e a outra começa às 12:00) não é sobrepor.
+    if (novo[0] < fim && inicio < novo[1]) {
+      const quando = `${linha.entrada.slice(0, 5)}${linha.saida ? ` às ${linha.saida.slice(0, 5)}` : ""}${linha.data === data ? "" : ` de ${linha.data.slice(8, 10)}/${linha.data.slice(5, 7)}`}`;
       throw new AppError(409, "SOBREPOSICAO", linha.origem === "pedido"
-        ? `Já existe um pedido de inclusão nesse dia (${quando}) esperando a empresa.`
-        : `Esse horário bate com uma marcação que já existe nesse dia (${quando}). Para corrigir uma batida, use "Corrigir uma batida".`);
+        ? `Já existe um pedido de inclusão nesse horário (${quando}) esperando a empresa.`
+        : `Esse horário bate com uma marcação que já existe (${quando}). Para corrigir uma batida, use "Corrigir uma batida".`);
     }
   }
 }
@@ -141,14 +181,26 @@ export class PontoColaboradorService {
     };
   }
 
+  /** Marca curta da senha atual (vai no token): trocou a senha, as sessões abertas antes param de valer. */
+  async marcaDaSenha(idColaborador: string): Promise<string> {
+    const linha = await this.db.query<{ sv: string }>(`
+      select left(md5(coalesce(c.senha_hash, '') || coalesce(c.senha, '')), 16) as sv
+      from dna_work.colaborador col join dna_work.candidato c on c.id_candidato = col.id_candidato
+      where col.id_colaborador = $1
+    `, [idColaborador]);
+    return linha.rows[0]?.sv ?? "";
+  }
+
   /** Ainda pode usar o app: contrato ativo, no ponto e empresa com o ponto ligado. Conferido em toda chamada. */
-  async acessoAtivo(idColaborador: string): Promise<boolean> {
+  async acessoAtivo(idColaborador: string, marca?: string): Promise<boolean> {
     const linha = await this.db.query(`
       select 1 from dna_work.colaborador col
       join dna_work.empresa e on e.id_empresa = col.id_empresa
+      join dna_work.candidato c on c.id_candidato = col.id_candidato
       where col.id_colaborador = $1 and coalesce(col.status_colaborador, 1) = 1
         and col.status_ponto::text = '1' and e.ponto::text = '1'
-    `, [idColaborador]);
+        and ($2::text is null or left(md5(coalesce(c.senha_hash, '') || coalesce(c.senha, '')), 16) = $2)
+    `, [idColaborador, marca ?? null]);
     return Boolean(linha.rowCount);
   }
 
@@ -279,7 +331,7 @@ export class PontoColaboradorService {
     const hora = /^([01]\d|2[0-3]):[0-5]\d$/;
     const campos: Record<string, string> = {};
     const agora = agoraSp();
-    const data = /^\d{4}-\d{2}-\d{2}$/.test(body.data) ? body.data.replaceAll("-", "/") : "";
+    const data = dataIsoValida(body.data)?.replaceAll("-", "/") ?? "";
     if (!data) campos.data = "Escolha o dia.";
     else if (data > agora.legado) campos.data = "O dia não pode ser no futuro.";
     else if (data < diaAnteriorN(agora.iso, 60)) campos.data = "Só dá para pedir nos últimos 60 dias. Fale com a empresa.";
@@ -288,10 +340,19 @@ export class PontoColaboradorService {
     if (!hora.test(body.saida)) campos.saida = "Informe a saída.";
     else if (body.saida === body.entrada) campos.saida = "A saída precisa ser diferente da entrada.";
     if (motivo.length < 5) campos.motivo = "Conte o motivo.";
-    if (!campos.data && data === agora.legado && !campos.saida && body.saida > body.entrada && `${body.saida}:00` > agora.hora) {
+    if (!campos.data && data === agora.legado && !campos.entrada && `${body.entrada}:00` > agora.hora) {
+      campos.entrada = "A entrada não pode ser depois de agora.";
+    } else if (!campos.data && data === agora.legado && !campos.saida && (body.saida < body.entrada || `${body.saida}:00` > agora.hora)) {
       campos.saida = "A saída não pode ser depois de agora.";
     }
     if (Object.keys(campos).length) throw new AppError(422, "VALIDACAO", Object.values(campos)[0], campos);
+    conferirPar(body.entrada, body.saida);
+    // Nas férias (ou com atestado do dia inteiro) não há trabalho para incluir, como já acontece com a batida.
+    const bloqueio = await this.bloqueio(idColaborador, data);
+    if (bloqueio) {
+      const motivoBloqueio = bloqueio.includes("férias") ? "Esse dia está nas suas férias." : "Esse dia tem atestado médico.";
+      throw new AppError(409, "DIA_BLOQUEADO", motivoBloqueio, { data: motivoBloqueio });
+    }
     const client = await this.db.connect();
     try {
       await client.query("begin");
@@ -336,13 +397,17 @@ export class PontoColaboradorService {
     if (atual.slice(0, 5) === body.hora) {
       throw new AppError(422, "SEM_MUDANCA", "Esse já é o horário registrado.", { hora: "Esse já é o horário registrado." });
     }
+    const novaEntrada = body.tipo === "entrada" ? body.hora : linha.entrada;
+    const novaSaida = body.tipo === "saida" ? body.hora : linha.saida;
+    conferirPar(novaEntrada, novaSaida, "hora");
+    if (novaEntrada) await conferirSobreposicao(this.db, idColaborador, linha.data, novaEntrada.slice(0, 5), (novaSaida ?? novaEntrada).slice(0, 5), body.idPonto);
     const client = await this.db.connect();
     try {
       await client.query("begin");
       await client.query("select pg_advisory_xact_lock(hashtext('justificativa'))");
       const pendente = await client.query("select 1 from dna_work.justificativa where id_ponto = $1 and tipo = $2 and aceite is null", [body.idPonto, body.tipo]);
       if (pendente.rowCount) throw new AppError(409, "JA_SOLICITADO", "Já existe um pedido para essa batida esperando a empresa.");
-      const id = (await client.query<{ id: number }>("select coalesce(max(id), 0) + 1 as id from dna_work.justificativa")).rows[0].id;
+      const id = await proximoId(client, "justificativa");
       await client.query(
         "insert into dna_work.justificativa (id, id_ponto, tipo, hora, texto) values ($1,$2,$3,$4,$5)",
         [id, body.idPonto, body.tipo, body.hora, motivo.slice(0, 255)],
@@ -360,24 +425,33 @@ export class PontoColaboradorService {
 
   async bater(idColaborador: string, confirmar: boolean, latitude: number | null, longitude: number | null, dispositivo: string) {
     const pessoa = await this.pessoa(idColaborador);
-    const agora = agoraSp();
-    const bloqueio = await this.bloqueio(idColaborador, agora.legado);
-    if (bloqueio) throw new AppError(409, "PONTO_BLOQUEADO", bloqueio);
-    const decisao = await this.decidir(idColaborador, agora);
-    const recente = await this.ultimaBatida(idColaborador);
-    if (recente && !confirmar && minutosEntre(recente, agora) < 5) {
-      throw new AppError(409, "CONFIRMAR_PONTO", "A última batida foi há menos de 5 minutos.");
-    }
-    const carga = decisao.tipo === "entrada" ? await this.cargaDoDia(idColaborador, decisao.data) : null;
+    // Horário de hoje lido antes de pegar a conexão (entrada nova é sempre de hoje).
+    const hojeLegado = agoraSp().legado;
+    const cargaHoje = await this.cargaDoDia(idColaborador, hojeLegado);
     const client = await this.db.connect();
     try {
       await client.query("begin");
+      // A trava vem antes de decidir entrada/saída: com dois cliques ao mesmo tempo, o segundo espera o primeiro gravar
+      // e já enxerga essa batida (sem a trava, os dois viam "entrada" e gravavam duas entradas abertas).
       await client.query("select pg_advisory_xact_lock(hashtext($1))", [`ponto-${pessoa.id_empresa}`]);
+      const agora = agoraSp();
+      // As leituras usam a mesma conexão: com vários cliques esperando a trava, o pool acabaria e tudo travaria.
+      const bloqueio = await this.bloqueio(idColaborador, agora.legado, client);
+      if (bloqueio) throw new AppError(409, "PONTO_BLOQUEADO", bloqueio);
+      const decisao = await this.decidir(idColaborador, agora, client);
+      const recente = await this.ultimaBatida(idColaborador, client);
+      const minutos = recente ? minutosEntre(recente, agora) : null;
+      // Menos de 1 minuto é clique repetido: não grava nem com confirmação. De 1 a 5 minutos, pergunta antes.
+      if (minutos !== null && minutos < 1) throw new AppError(409, "PONTO_REPETIDO", "Seu ponto acabou de ser registrado. Atualize a tela.");
+      if (minutos !== null && !confirmar && minutos < 5) {
+        throw new AppError(409, "CONFIRMAR_PONTO", "A última batida foi há menos de 5 minutos.");
+      }
+      const carga = decisao.tipo !== "entrada" ? null : decisao.data === hojeLegado ? cargaHoje : await this.cargaDoDia(idColaborador, decisao.data);
       const nsr = await this.proximoNsr(client, pessoa.id_empresa, agora.iso);
-      await this.gravarAfd(client, pessoa, nsr, agora, decisao.data);
+      await this.gravarAfd(client, pessoa, nsr, agora);
       const coords = { latitude, longitude, dispositivo: dispositivo.slice(0, 100) };
       if (decisao.tipo === "entrada") {
-        const id = await this.proximoPonto(client);
+        const id = await proximoId(client, "tabela_ponto");
         await client.query(`
           insert into dna_work.tabela_ponto
             (id, id_colaborador, data, entrada, entrada_editado, data_entrada, nsf_entrada,
@@ -424,14 +498,14 @@ export class PontoColaboradorService {
     return pessoa;
   }
 
-  private async bloqueio(idColaborador: string, data: string) {
-    const ferias = await this.db.query(`
+  private async bloqueio(idColaborador: string, data: string, q: Consulta = this.db) {
+    const ferias = await q.query(`
       select 1 from dna_work.ferias
       where id_colaborador = $1 and replace(inicio, '-', '/') <= $2 and replace(fim, '-', '/') >= $2
       limit 1
     `, [idColaborador, data]);
     if (ferias.rows.length) return "Você está de férias.";
-    const atestado = await this.db.query(`
+    const atestado = await q.query(`
       select 1 from dna_work.atestado_medico
       where id_colaborador = $1 and replace(data, '-', '/') = $2 and dia_completo::text = '1'
       limit 1
@@ -459,8 +533,8 @@ export class PontoColaboradorService {
     }));
   }
 
-  private async decidir(idColaborador: string, agora: { legado: string; hora: string; iso: string }) {
-    const rows = await this.db.query<Batida>(`
+  private async decidir(idColaborador: string, agora: { legado: string; hora: string; iso: string }, q: Consulta = this.db) {
+    const rows = await q.query<Batida>(`
       select id, data, coalesce(entrada_editado, entrada) as entrada, coalesce(saida_editado, saida) as saida,
              nsf_entrada, nsf_saida, id_carga
       from dna_work.tabela_ponto
@@ -472,15 +546,15 @@ export class PontoColaboradorService {
     const ontem = diaAnterior(agora.iso);
     if (!ultimo || ultimo.saida) return { tipo: "entrada" as const, data: agora.legado, id: 0, entrada: "" };
     if (ultimo.data === agora.legado) return { tipo: "saida" as const, data: ultimo.data, id: ultimo.id, entrada: ultimo.entrada ?? "" };
-    const noturno = await this.noturno(ultimo.id_carga);
+    const noturno = await this.noturno(ultimo.id_carga, q);
     if (noturno && agora.hora < "12:00:00" && ultimo.data === ontem) {
       return { tipo: "saida" as const, data: ultimo.data, id: ultimo.id, entrada: ultimo.entrada ?? "" };
     }
     return { tipo: "entrada" as const, data: agora.legado, id: 0, entrada: "" };
   }
 
-  private async ultimaBatida(idColaborador: string) {
-    const rows = await this.db.query<{ data: string; hora: string }>(`
+  private async ultimaBatida(idColaborador: string, q: Consulta = this.db) {
+    const rows = await q.query<{ data: string; hora: string }>(`
       select data, coalesce(nullif(saida, ''), entrada) as hora
       from dna_work.tabela_ponto
       where id_colaborador = $1 and coalesce(excluido, 0) = 0 and coalesce(entrada, '') <> ''
@@ -490,9 +564,9 @@ export class PontoColaboradorService {
     return rows.rows[0] ?? null;
   }
 
-  private async noturno(idCarga: string | null) {
+  private async noturno(idCarga: string | null, q: Consulta = this.db) {
     if (!idCarga) return false;
-    const carga = await this.db.query<{ entrada: string | null; saida: string | null }>(
+    const carga = await q.query<{ entrada: string | null; saida: string | null }>(
       "select entrada, saida from dna_work.ponto_carga_base where id::text = $1",
       [idCarga],
     );
@@ -545,20 +619,26 @@ export class PontoColaboradorService {
     return 1;
   }
 
-  private async proximoPonto(client: PoolClient) {
-    const result = await client.query<{ id: number }>("select coalesce(max(id), 0) + 1 as id from dna_work.tabela_ponto");
-    return result.rows[0].id;
+  /**
+   * Registro tipo "7" do AFD (Portaria MTP 671/2021, Anexo V): data e hora no formato AAAA-MM-ddThh:mm:00-0300 (segundos
+   * sempre "00"), marcação com a data e a hora reais do relógio (a saída de um turno noturno é do dia seguinte),
+   * coletor "02" (navegador), "0" on-line e o hash SHA-256 dos campos 1 a 7 junto com o hash do registro anterior.
+   * Roda dentro da trava da empresa, então o registro anterior (NSR - 1) já está gravado.
+   */
+  private async gravarAfd(client: PoolClient, pessoa: ColaboradorPonto, nsr: number, agora: { iso: string; hora: string }) {
+    const minuto = `${agora.iso}T${agora.hora.slice(0, 5)}:00-0300`;
+    const campos = `${String(nsr).padStart(9, "0")}7${minuto}${cpf12(pessoa.cpf)}${minuto}020`;
+    const anterior = (await client.query<{ rash: string | null }>(
+      "select rash from dna_work.ponto_afd where id_empresa = $1 and nsr = $2 and tipo = 7 order by data desc limit 1",
+      [pessoa.id_empresa, nsr - 1],
+    )).rows[0]?.rash ?? "";
+    const hash = createHash("sha256").update(campos + anterior, "latin1").digest("hex");
+    await client.query(`
+      insert into dna_work.ponto_afd (nsr, id_empresa, id_colaborador, tipo, data, linha, rash)
+      values ($1,$2,$3,7,$4,$5,$6)
+    `, [nsr, pessoa.id_empresa, pessoa.id_colaborador, agora.iso, campos + hash, hash]);
   }
 
-  private async gravarAfd(client: PoolClient, pessoa: ColaboradorPonto, nsr: number, agora: { iso: string; hora: string }, dataPonto: string) {
-    const marca = `${dataPonto.replaceAll("/", "-")}T${agora.hora}-0300`;
-    const gravacao = `${agora.iso}T${agora.hora}-0300`;
-    const linha = `${String(nsr).padStart(9, "0")}7${marca}${cpf12(pessoa.cpf)}${gravacao}020`;
-    await client.query(`
-      insert into dna_work.ponto_afd (nsr, id_empresa, id_colaborador, tipo, data, linha)
-      values ($1,$2,$3,7,$4,$5)
-    `, [nsr, pessoa.id_empresa, pessoa.id_colaborador, agora.iso, linha]);
-  }
 }
 
 function agoraSp() {

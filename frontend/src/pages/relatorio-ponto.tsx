@@ -24,7 +24,7 @@ export function Saldo({ minutos, className = "" }: { minutos: number | null | un
 
 type LinhaRelatorio = {
   id_candidato: string; nome: string; cargo: string; departamento: string; jornada: string; modalidade: string; situacao: string;
-  feitos: number; previstos: number; saldo: number; saldoTotal: number | null;
+  feitos: number; previstos: number; saldo: number; saldoTotal: number | null; noturnos?: number;
   diasTrabalhados: number; faltas: number; incompletas: number; atestados: number; almocoPerto: number; estagioAcima: boolean;
 };
 type Relatorio = { de: string; ate: string; linhas: LinhaRelatorio[] };
@@ -68,6 +68,8 @@ export function RelatorioPonto() {
   const total = linhas.reduce((soma, linha) => ({
     feitos: soma.feitos + linha.feitos, previstos: soma.previstos + linha.previstos, saldo: soma.saldo + linha.saldo, faltas: soma.faltas + linha.faltas,
   }), { feitos: 0, previstos: 0, saldo: 0, faltas: 0 });
+  // Coluna de horas noturnas (22h às 5h, hora reduzida) só quando alguém trabalhou à noite: base do adicional noturno.
+  const temNoturno = linhas.some((linha) => linha.noturnos);
   const linkPessoa = (linha: LinhaRelatorio) => `/ponto/colaborador/${linha.id_candidato}?de=${periodo.de}&ate=${periodo.ate}`;
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-5">
@@ -114,7 +116,7 @@ export function RelatorioPonto() {
                   <table className="data-table min-w-[960px]">
                     <thead>
                       <tr>
-                        {["Colaborador", "Jornada", "Dias", "Trabalhado", "Previsto", "Saldo do período", "Saldo total", "Ocorrências"].map((titulo) => <th key={titulo}>{titulo}</th>)}
+                        {["Colaborador", "Jornada", "Dias", "Trabalhado", ...(temNoturno ? ["Noturno"] : []), "Previsto", "Saldo do período", "Saldo total", "Ocorrências"].map((titulo) => <th key={titulo}>{titulo}</th>)}
                       </tr>
                     </thead>
                     <tbody>
@@ -127,6 +129,7 @@ export function RelatorioPonto() {
                           <td className="text-sm text-slate-600">{linha.jornada || "—"}</td>
                           <td className="tabular-nums">{linha.diasTrabalhados}</td>
                           <td className="tabular-nums">{horasMin(linha.feitos)}</td>
+                          {temNoturno ? <td className="tabular-nums text-slate-500">{linha.noturnos ? horasMin(linha.noturnos) : "—"}</td> : null}
                           <td className="tabular-nums text-slate-500">{horasMin(linha.previstos)}</td>
                           <td><Saldo minutos={linha.saldo} /></td>
                           <td><Saldo minutos={linha.saldoTotal} /></td>

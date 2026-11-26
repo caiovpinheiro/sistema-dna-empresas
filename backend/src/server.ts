@@ -62,6 +62,26 @@ try {
     )
   `);
   await db.query("create index if not exists ponto_inclusao_colaborador on dna_work.ponto_inclusao (id_colaborador)");
+  // Histórico da jornada de cada pessoa: mudar a jornada vale de hoje em diante e não muda o espelho dos dias passados.
+  // dias = { segunda: { trabalha, carga }, ... } com o horário copiado (a carga original pode ser apagada depois).
+  await db.query(`
+    create table if not exists dna_work.ponto_jornada_historico (
+      id serial primary key,
+      id_colaborador character varying not null,
+      desde character varying(10) not null,
+      dias jsonb not null,
+      criado_em timestamptz not null default now(),
+      unique (id_colaborador, desde)
+    )
+  `);
+  // Sessões encerradas antes de vencer (botão Sair): o token fica inválido até a hora em que venceria.
+  await db.query(`
+    create table if not exists dna_work.portal_sessao_revogada (
+      jti character varying(64) primary key,
+      expira timestamptz not null
+    )
+  `);
+  await db.query("delete from dna_work.portal_sessao_revogada where expira < now()");
   // Pedido respondido por um colaborador com permissão (pelo app do ponto): guarda quem foi, além do login da empresa.
   await db.query("alter table dna_work.ponto_inclusao add column if not exists id_gestor character varying");
   await db.query("alter table dna_work.justificativa add column if not exists id_gestor character varying");

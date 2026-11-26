@@ -6,6 +6,8 @@ export type FeriadoNacional = { data: string; nome: string };
 
 const DIA_MS = 24 * 60 * 60 * 1000;
 const cache = new Map<number, { quando: number; lista: FeriadoNacional[] }>();
+const NAO_SAO_NACIONAIS = /carnaval|corpus christi|quarta-feira de cinzas/i;
+const semAcentos = (texto: string) => texto.normalize("NFD").replace(/[̀-ͯ]/g, "");
 
 /** Lista do ano (data YYYY-MM-DD). `ok` false quando a BrasilAPI não respondeu: a lista volta vazia e não fica no cache. */
 export async function feriadosNacionais(ano: number): Promise<{ ok: boolean; lista: FeriadoNacional[] }> {
@@ -23,6 +25,9 @@ export async function feriadosNacionais(ano: number): Promise<{ ok: boolean; lis
     const corpo = await resposta.json() as Array<{ date?: string; name?: string }>;
     const lista = corpo
       .filter((item) => /^\d{4}-\d{2}-\d{2}$/.test(item.date ?? "") && item.name)
+      // A BrasilAPI manda Carnaval e Corpus Christi como nacionais, mas pela lei federal são ponto facultativo
+      // (Leis 662/49 e 10.607/02). Quem dá folga nesses dias cadastra como feriado da empresa.
+      .filter((item) => !NAO_SAO_NACIONAIS.test(semAcentos(item.name!)))
       .map((item) => ({ data: item.date!, nome: item.name!.trim() }));
     cache.set(ano, { quando: Date.now(), lista });
     return { ok: true, lista };

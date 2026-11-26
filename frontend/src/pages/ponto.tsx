@@ -167,8 +167,9 @@ export function FeriadoNovo({ aoFechar }: { aoFechar?: () => void } = {}) {
 
 export { RelatorioPonto } from "./relatorio-ponto";
 
-type ResumoPeriodo = { feitos: number; previstos: number; saldo: number; diasTrabalhados: number; faltas: number; incompletas: number; atestados: number; almocoPerto?: number };
-type DiaPonto = { data: string; dia: string; anterior?: boolean; incompleta?: boolean; ajustado?: boolean; alertaAlmoco?: string; situacao: string; entrada1: string; saida1: string; entrada2: string; saida2: string; total: string; carga: string; saldo: string; saldoNegativo: boolean; banco: string; bancoNegativo: boolean };
+type ResumoPeriodo = { feitos: number; previstos: number; saldo: number; diasTrabalhados: number; faltas: number; incompletas: number; atestados: number; almocoPerto?: number; noturnos?: number };
+type Marcacao = { entrada: string; saida: string; ajustada: boolean };
+type DiaPonto = { data: string; dia: string; anterior?: boolean; incompleta?: boolean; ajustado?: boolean; alertaAlmoco?: string; situacao: string; entrada1: string; saida1: string; entrada2: string; saida2: string; marcacoes?: Marcacao[]; noturno?: string; total: string; carga: string; saldo: string; saldoNegativo: boolean; banco: string; bancoNegativo: boolean };
 type RelatorioPessoa = {
   nome: string; cargo: string; bancoHoras: boolean; semRegistro?: boolean; estagio?: boolean; desligado?: boolean;
   inicioContrato?: string; temAnterior?: boolean; cadastro?: Record<string, string>;
@@ -219,6 +220,10 @@ export function RelatorioPontoColaborador({ id }: { id: string }) {
   const temDiaAnterior = dias.some((dia) => dia.anterior);
   // Banco de horas gravado pelo sistema antigo: a coluna só aparece quando há valor.
   const temBanco = dias.some((dia) => dia.banco);
+  // Mais de 2 pares no dia: as outras marcações aparecem numa coluna a mais (o espelho mostra todas).
+  const temMais = dias.some((dia) => (dia.marcacoes?.length ?? 0) > 2);
+  // Trabalho entre 22h e 5h: coluna com as horas noturnas, já com a hora reduzida (CLT, art. 73).
+  const temNoturno = dias.some((dia) => dia.noturno);
   useEffect(() => {
     if (!periodo.de && pessoa?.de) setDe(pessoa.de);
     if (!periodo.ate && pessoa?.ate) setAte(pessoa.ate);
@@ -273,6 +278,7 @@ export function RelatorioPontoColaborador({ id }: { id: string }) {
               {pessoa.periodo.faltas ? ` · ${pessoa.periodo.faltas} ${pessoa.periodo.faltas === 1 ? "falta" : "faltas"}` : ""}
               {pessoa.periodo.atestados ? ` · ${pessoa.periodo.atestados} ${pessoa.periodo.atestados === 1 ? "atestado" : "atestados"}` : ""}
             </p>
+            {pessoa.periodo.noturnos ? <p className="text-xs text-slate-500">{horasMin(pessoa.periodo.noturnos)} de trabalho noturno (22h às 5h, com a hora reduzida), para o adicional noturno.</p> : null}
             {pessoa.periodo.incompletas ? <p className="text-xs font-semibold text-amber-700">{pessoa.periodo.incompletas} {pessoa.periodo.incompletas === 1 ? "batida incompleta" : "batidas incompletas"}: falta a saída</p> : null}
             {pessoa.periodo.almocoPerto ? <p className="text-xs font-semibold text-rose-700">{pessoa.periodo.almocoPerto} {pessoa.periodo.almocoPerto === 1 ? "dia com almoço" : "dias com almoço"} a menos de 1 hora da entrada ou da saída</p> : null}
             {pessoa.estagio && pessoa.periodo.saldo > 0 ? <p className="text-xs font-semibold text-amber-700">Estágio acima da jornada: a Lei do Estágio não permite hora extra.</p> : null}
@@ -291,7 +297,7 @@ export function RelatorioPontoColaborador({ id }: { id: string }) {
             <table className="data-table min-w-[860px]">
               <thead>
                 <tr>
-                  {["Data", "Dia", "Ent. 1", "Saí. 1", "Ent. 2", "Saí. 2", "Total", "Carga", "Saldo", ...(temBanco ? ["B. Horas"] : [])].map((titulo) => <th key={titulo}>{titulo}</th>)}
+                  {["Data", "Dia", "Ent. 1", "Saí. 1", "Ent. 2", "Saí. 2", ...(temMais ? ["Outras batidas"] : []), "Total", ...(temNoturno ? ["Noturno"] : []), "Carga", "Saldo", ...(temBanco ? ["B. Horas"] : [])].map((titulo) => <th key={titulo}>{titulo}</th>)}
                 </tr>
               </thead>
               <tbody>
@@ -308,7 +314,18 @@ export function RelatorioPontoColaborador({ id }: { id: string }) {
                     <td className="tabular-nums">{dia.saida1 || (dia.incompleta && dia.entrada1 ? <span className="font-semibold text-amber-700">Sem saída</span> : "—")}</td>
                     <td className="tabular-nums">{dia.entrada2 || "—"}</td>
                     <td className="tabular-nums">{dia.saida2 || (dia.incompleta && dia.entrada2 ? <span className="font-semibold text-amber-700">Sem saída</span> : "—")}</td>
+                    {temMais ? (
+                      <td className="tabular-nums">
+                        {(dia.marcacoes ?? []).slice(2).map((marcacao, indice) => (
+                          <span key={indice} className="mr-2 inline-block whitespace-nowrap">
+                            {marcacao.entrada}–{marcacao.saida || <span className="font-semibold text-amber-700">sem saída</span>}
+                          </span>
+                        ))}
+                        {(dia.marcacoes?.length ?? 0) <= 2 ? "—" : null}
+                      </td>
+                    ) : null}
                     <td className="font-semibold tabular-nums">{dia.total}</td>
+                    {temNoturno ? <td className="tabular-nums text-slate-500">{dia.noturno || "—"}</td> : null}
                     <td className="tabular-nums text-slate-500">{dia.carga}</td>
                     <td className={cn("font-semibold tabular-nums", dia.saldoNegativo ? "text-rose-700" : dia.saldo !== "00:00:00" ? "text-emerald-700" : "text-slate-500")}>
                       {dia.saldoNegativo ? "-" : dia.saldo !== "00:00:00" ? "+" : ""}{dia.saldo}
